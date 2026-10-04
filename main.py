@@ -1,12 +1,9 @@
-# %%
-import nest_asyncio
 import uvicorn
 from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import sqlite3
 from jinja2 import Template
 
-nest_asyncio.apply()
 app = FastAPI()
 DB_FILE = "database_fukyo_v2.db"
 
@@ -118,7 +115,6 @@ function toggleSpoiler(btn) {
     }
 }
 
-// ゲーム全体の共有機能
 function shareGameToX(title) { 
     const text = encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n#OshiGe\\n`);
     window.open(`https://x.com/intent/tweet?text=${text}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
@@ -128,7 +124,6 @@ function shareGameToLine(title) {
     window.open(`https://line.me/R/msg/text/?${text}${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
-// 投稿ごとの個別共有機能
 function sharePost(btn, platform) {
     const gameId = btn.getAttribute('data-id');
     const title = btn.getAttribute('data-title');
@@ -191,7 +186,6 @@ BASE_HTML = """
     <header class="header-container">
         <h1><a href="/">🎮 Oshi-Ge</a></h1>
         <div style="display:flex; gap: 1rem;">
-            <!-- 強制的に白文字にしてボタンを見えやすく修正 -->
             <a href="/games/new" class="btn btn-primary btn-small" style="color: #ffffff;">＋ ゲームを布教する</a>
             <a href="/mypage" class="btn btn-outline btn-small" style="color:var(--text-main);">👤 マイページ</a>
         </div>
@@ -357,7 +351,6 @@ GAME_HTML = """
         {% elif post.spoiler_level == 1 %}<div><button type="button" class="spoiler-toggle-btn warning" onclick="toggleSpoiler(this)">🔒 軽微なネタバレの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>
         {% elif post.spoiler_level == 2 %}<div><button type="button" class="spoiler-toggle-btn danger" onclick="toggleSpoiler(this)">⚠ ネタバレありの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>{% endif %}
         
-        <!-- 個別の布教コメントを共有するボタン -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
             <div style="display: flex; gap: 0.5rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
@@ -558,8 +551,5 @@ async def mypage(request: Request):
     return render_page(MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games)
 
 # --- 4. サーバーの起動 ---
-# --- 4. サーバーの起動 ---
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)
