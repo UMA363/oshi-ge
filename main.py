@@ -179,7 +179,17 @@ BASE_HTML = """
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>Oshi-Ge | ネタバレなしゲーム布教サイト</title>
+    <title>Oshi-Ge | ゲーム布教サイト</title>
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XRFBSR9HSR"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-XRFBSR9HSR');
+    </script>
+    
     <style>{{ css }}</style>
 </head>
 <body>
