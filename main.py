@@ -558,11 +558,8 @@ async def mypage(request: Request):
     return render_page(MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games)
 
 # --- 4. サーバーの起動 ---
+# --- 4. サーバーの起動 ---
 if __name__ == "__main__":
-    print("サーバーを起動しました。ブラウザで http://127.0.0.1:8000 にアクセスしてください。")
-    print("停止するには、セルの実行を停止（■ボタン）してください。")
-    config = uvicorn.Config(app, host="127.0.0.1", port=8000)
-    server = uvicorn.Server(config)
-    await server.serve()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
