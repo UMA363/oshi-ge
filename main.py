@@ -262,64 +262,183 @@ function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
     return lines.length;
 }
 
+function drawRoundRect(ctx, x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+}
+
 function drawPromoCard() {
     const modal = document.getElementById('promo-card-modal');
     const canvas = document.getElementById('promoCanvas');
     if (!modal || !canvas) return;
+
     const ctx = canvas.getContext('2d');
     const W = 1200, H = 800;
     canvas.width = W;
     canvas.height = H;
 
+    const title = modal.dataset.title || 'おすすめゲーム';
+    const catchphrase = modal.dataset.catchphrase || 'このゲーム、ぜひ遊んでほしい！';
+    const target = modal.dataset.target || '';
+    const playTime = modal.dataset.playTime || '';
+    const genre = modal.dataset.genre || '';
+    const platform = modal.dataset.platform || '';
+    const username = modal.dataset.username || '名無しの布教者';
+    const spoiler = Number(modal.dataset.spoiler || 0);
+
+    // ===== 背景 =====
     const bg = ctx.createLinearGradient(0, 0, W, H);
-    bg.addColorStop(0, '#0f172a');
-    bg.addColorStop(1, '#1e293b');
+    bg.addColorStop(0, '#111827');
+    bg.addColorStop(0.55, '#0f172a');
+    bg.addColorStop(1, '#020617');
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
+    // 右上の装飾光
+    const glow = ctx.createRadialGradient(1030, 100, 20, 1030, 100, 430);
+    glow.addColorStop(0, 'rgba(245,158,11,0.22)');
+    glow.addColorStop(1, 'rgba(245,158,11,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(650, 0, 550, 500);
+
+    // 左側のアクセントライン
     ctx.fillStyle = '#f59e0b';
-    ctx.fillRect(0, 0, W, 18);
-    ctx.fillRect(0, H - 18, W, 18);
+    ctx.fillRect(0, 0, 14, H);
+
+    // ===== ヘッダー =====
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '900 28px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    ctx.fillText('OSHI-GE', 58, 62);
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    ctx.fillText('GAME RECOMMENDATION CARD', 58, 91);
+
+    // ===== タイトル =====
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '900 58px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    const titleLines = wrapCanvasText(
+        ctx, title, 58, 158, 1080, 70, 2
+    );
+
+    // ===== キャッチコピー =====
+    const quoteY = 305 + Math.max(0, titleLines - 1) * 20;
+    drawRoundRect(ctx, 58, quoteY, 1084, 158, 18);
+    ctx.fillStyle = 'rgba(245,158,11,0.10)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(245,158,11,0.65)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
 
     ctx.fillStyle = '#f59e0b';
-    ctx.font = '900 34px Arial, sans-serif';
-    ctx.fillText('🎮 Oshi-Ge', 55, 72);
+    ctx.font = '900 20px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    ctx.fillText('このゲームを一言で言うと', 88, quoteY + 38);
 
-    ctx.fillStyle = '#f8fafc';
-    ctx.font = '900 56px Arial, sans-serif';
-    wrapCanvasText(ctx, modal.dataset.title || 'おすすめゲーム', 55, 145, 1090, 64, 2);
+    ctx.fillStyle = '#fff7ed';
+    ctx.font = '900 34px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    wrapCanvasText(
+        ctx, '「' + catchphrase + '」',
+        88, quoteY + 84, 1015, 46, 2
+    );
 
-    const catchphraseY = 295;
-    ctx.fillStyle = '#0b1120';
-    ctx.fillRect(50, catchphraseY - 48, 1100, 150);
-    ctx.strokeStyle = '#f59e0b';
-    ctx.lineWidth = 3;
-    ctx.strokeRect(50, catchphraseY - 48, 1100, 150);
+    // ===== 下段メタ情報 =====
+    let y = quoteY + 195;
 
-    ctx.fillStyle = '#fcd34d';
-    ctx.font = '900 36px Arial, sans-serif';
-    wrapCanvasText(ctx, '「' + (modal.dataset.catchphrase || '') + '」', 80, catchphraseY, 1040, 48, 2);
+    if (target) {
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+        ctx.fillText('こんな人におすすめ', 60, y);
+        y += 34;
 
-    let metaY = 485;
-    if (Number(modal.dataset.spoiler || 0) > 0) {
-        ctx.fillStyle = Number(modal.dataset.spoiler) === 2 ? '#fca5a5' : '#fde68a';
-        ctx.font = '900 28px Arial, sans-serif';
-        ctx.fillText(Number(modal.dataset.spoiler) === 2 ? '⚠️ ネタバレあり' : '🔒 軽微なネタバレあり', 60, 445);
-        metaY = 500;
+        drawRoundRect(ctx, 58, y, 1084, 58, 12);
+        ctx.fillStyle = '#1e293b';
+        ctx.fill();
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '700 22px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+        wrapCanvasText(ctx, target, 82, y + 37, 1020, 28, 1);
+        y += 76;
     }
-    ctx.font = 'bold 24px Arial, sans-serif';
-    ctx.fillStyle = '#cbd5e1';
-    const meta = [];
-    if (modal.dataset.target) meta.push('🎯 ' + modal.dataset.target);
-    if (modal.dataset.playTime) meta.push('⏱ ' + modal.dataset.playTime);
-    if (modal.dataset.genre) meta.push('🎮 ' + modal.dataset.genre);
-    if (modal.dataset.platform) meta.push('💻 ' + modal.dataset.platform);
-    if (meta.length) wrapCanvasText(ctx, meta.join('　　'), 60, metaY, 1080, 34, 2);
 
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '20px Arial, sans-serif';
-    ctx.fillText('布教者：' + (modal.dataset.username || '名無しの布教者'), 60, 700);
-    ctx.fillText('ゲームを探すなら Oshi-Ge', 660, 700);
+    // 情報チップ
+    const chips = [];
+    if (playTime) chips.push('PLAY ' + playTime);
+    if (genre) chips.push(genre);
+    if (platform) chips.push(platform);
+
+    if (chips.length) {
+        let x = 58;
+        ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+
+        for (const chip of chips) {
+            const width = Math.min(340, Math.max(105, ctx.measureText(chip).width + 38));
+            if (x + width > 1142) {
+                x = 58;
+                y += 66;
+            }
+
+            drawRoundRect(ctx, x, y, width, 48, 24);
+            ctx.fillStyle = '#172033';
+            ctx.fill();
+            ctx.strokeStyle = '#475569';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            ctx.fillStyle = '#cbd5e1';
+            ctx.fillText(chip, x + 19, y + 31);
+            x += width + 12;
+        }
+        y += 66;
+    }
+
+    // ===== ネタバレ表示 =====
+    if (spoiler > 0) {
+        const spoilerText = spoiler === 2
+            ? 'WARNING  ネタバレあり'
+            : 'CAUTION  軽微なネタバレあり';
+
+        ctx.font = '900 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+        const sw = ctx.measureText(spoilerText).width + 36;
+
+        drawRoundRect(ctx, 58, Math.min(y, 650), sw, 44, 22);
+        ctx.fillStyle = spoiler === 2
+            ? 'rgba(239,68,68,0.15)'
+            : 'rgba(245,158,11,0.15)';
+        ctx.fill();
+        ctx.strokeStyle = spoiler === 2
+            ? 'rgba(239,68,68,0.65)'
+            : 'rgba(245,158,11,0.65)';
+        ctx.stroke();
+
+        ctx.fillStyle = spoiler === 2 ? '#fca5a5' : '#fde68a';
+        ctx.fillText(spoilerText, 76, Math.min(y, 650) + 29);
+    }
+
+    // ===== フッター =====
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(58, 718);
+    ctx.lineTo(1142, 718);
+    ctx.stroke();
+
+    ctx.fillStyle = '#64748b';
+    ctx.font = '18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    ctx.fillText('布教者：' + username, 58, 754);
+
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '900 20px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    const brand = 'Oshi-Ge';
+    ctx.fillText(brand, 1142 - ctx.measureText(brand).width, 754);
 }
 
 function downloadPromoCard() {
@@ -562,7 +681,7 @@ GAME_HTML = """
             <button type="button" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
             <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
         </div>
-        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">布教カードは画像として保存できます。X・LINEでの共有は、各布教コメントの共有ボタンをご利用ください。</div>
+        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">このカードはSNSなどに載せる画像として保存できます。X・LINEの共有は各共有ボタンからどうぞ。</div>
     </div>
 </div>
 """
