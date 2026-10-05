@@ -1,4 +1,5 @@
 import os
+import urllib.request
 import uvicorn
 from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -38,6 +39,18 @@ def init_db():
         print("DB Init error:", e)
 
 init_db()
+
+# --- 1.5 画像中継プロキシ（CORSエラー回避用） ---
+@app.get("/proxy-image")
+async def proxy_image(url: str):
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req) as response:
+            data = response.read()
+            content_type = response.headers.get('Content-Type', 'image/jpeg')
+            return Response(content=data, media_type=content_type)
+    except Exception:
+        raise HTTPException(status_code=404)
 
 # --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
@@ -222,7 +235,7 @@ function isMobileDevice() {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 }
 
-function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform, spoilerLevel, content) {
+function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform, spoilerLevel, content, imageUrl) {
     const modal = document.getElementById('promo-card-modal');
     if (!modal) return;
     modal.style.display = 'flex';
@@ -235,6 +248,7 @@ function openPromoCard(title, catchphrase, targetAudience, playTime, username, g
     modal.dataset.platform = platform || '';
     modal.dataset.spoiler = String(spoilerLevel || 0);
     modal.dataset.content = content || '';
+    modal.dataset.imageUrl = imageUrl || ''; 
     
     const dlBtn = document.getElementById('promo-dl-btn');
     const instruction = document.getElementById('promo-instruction');
@@ -289,13 +303,13 @@ function drawRoundRect(ctx, x, y, w, h, r) {
     ctx.closePath();
 }
 
-function drawPromoCard() {
+async function drawPromoCard() {
     const modal = document.getElementById('promo-card-modal');
     const canvas = document.getElementById('promoCanvas');
     if (!modal || !canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const W = 1200, H = 960; // 高さを960へ拡張
+    const W = 1200, H = 960; 
     canvas.width = W;
     canvas.height = H;
 
@@ -307,12 +321,12 @@ function drawPromoCard() {
     const platform = modal.dataset.platform || '';
     const username = modal.dataset.username || '名無しの布教者';
     const spoiler = Number(modal.dataset.spoiler || 0);
+    const imageUrl = modal.dataset.imageUrl || '';
     let contentRaw = modal.dataset.content || '';
 
-    // ネタバレが含まれる場合は感想を強制非表示
     if (spoiler > 0) contentRaw = '';
 
-    // ===== 背景 =====
+    // ===== ベース背景 =====
     const bg = ctx.createLinearGradient(0, 0, W, H);
     bg.addColorStop(0, '#111827');
     bg.addColorStop(0.55, '#0f172a');
@@ -320,12 +334,62 @@ function drawPromoCard() {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    const glow = ctx.createRadialGradient(1030, 100, 20, 1030, 100, 430);
-    glow.addColorStop(0, 'rgba(245,158,11,0.22)');
-    glow.addColorStop(1, 'rgba(245,158,11,0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(650, 0, 550, 500);
+    // ===== 画像ロードとフェード背景 =====
+    if (imageUrl) {
+        try {
+            const img = new Image();
+            img.crossOrigin = 'Anonymous'; 
+            img.src = '/proxy-image?url=' + encodeURIComponent(imageUrl);
+            
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+            });
+            
+            const imgRatio = img.width / img.height;
+            const targetRatio = W / 550;
+            let drawW, drawH, drawX, drawY;
+            
+            if (imgRatio > targetRatio) {
+                drawH = 550; drawW = img.width * (550 / img.height);
+                drawX = (W - drawW) / 2; drawY = 0;
+            } else {
+                drawW = W; drawH = img.height * (W / img.width);
+                drawX = 0; drawY = (550 - drawH) / 2;
+            }
+            
+            ctx.save();
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.rect(0, 0, W, 550);
+            ctx.clip();
+            ctx.drawImage(img, drawX, drawY, drawW, drawH);
+            ctx.restore();
+            
+            const fade = ctx.createLinearGradient(0, 0, 0, 550);
+            fade.addColorStop(0, 'rgba(15, 23, 42, 0)');
+            fade.addColorStop(0.6, 'rgba(15, 23, 42, 0.6)');
+            fade.addColorStop(1, '#0f172a');
+            ctx.fillStyle = fade;
+            ctx.fillRect(0, 0, W, 550);
+            
+        } catch(e) {
+            console.error("Image load failed", e);
+            drawFallbackGlow(ctx);
+        }
+    } else {
+        drawFallbackGlow(ctx);
+    }
 
+    function drawFallbackGlow(ctx) {
+        const glow = ctx.createRadialGradient(1030, 100, 20, 1030, 100, 430);
+        glow.addColorStop(0, 'rgba(245,158,11,0.22)');
+        glow.addColorStop(1, 'rgba(245,158,11,0)');
+        ctx.fillStyle = glow;
+        ctx.fillRect(650, 0, 550, 500);
+    }
+
+    // ===== アクセントライン =====
     ctx.fillStyle = '#f59e0b';
     ctx.fillRect(0, 0, 14, H);
 
@@ -333,20 +397,22 @@ function drawPromoCard() {
     ctx.fillStyle = '#f59e0b';
     ctx.font = '900 28px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
     ctx.fillText('OSHI-GE', 58, 62);
-
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = '#cbd5e1';
     ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
     ctx.fillText('GAME RECOMMENDATION CARD', 58, 91);
 
     // ===== タイトル =====
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 58px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
+    ctx.shadowBlur = 10;
     const titleLines = wrapCanvasText(ctx, title, 58, 158, 1080, 70, 2);
+    ctx.shadowBlur = 0;
 
     // ===== キャッチコピー =====
     const quoteY = 305 + Math.max(0, titleLines - 1) * 20;
     drawRoundRect(ctx, 58, quoteY, 1084, 158, 18);
-    ctx.fillStyle = 'rgba(245,158,11,0.10)';
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
     ctx.fill();
     ctx.strokeStyle = 'rgba(245,158,11,0.65)';
     ctx.lineWidth = 2;
@@ -362,8 +428,8 @@ function drawPromoCard() {
 
     let y = quoteY + 200;
 
-    // ===== 感想（文字数判定による動的表示） =====
-    const cleanContent = contentRaw.replace(/\\s+/g, ' ').trim();
+    // ===== 感想 =====
+    const cleanContent = contentRaw.replace(/\s+/g, ' ').trim();
     if (cleanContent.length >= 15) {
         ctx.fillStyle = '#cbd5e1';
         ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
@@ -450,7 +516,6 @@ function drawPromoCard() {
     }
 
     // ===== フッター =====
-    // 描画要素が下まで伸びた場合、フッターが自動で下へ逃げる処理を追加
     const footerY = Math.max(y + 20, H - 90);
 
     ctx.strokeStyle = '#334155';
@@ -688,7 +753,7 @@ GAME_HTML = """
             <div style="display: flex; gap: 0.5rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default("")|tojson }}, {{ post.target_audience|default("")|tojson }}, {{ post.play_time|default("")|tojson }}, {{ post.username|default("名無しの布教者")|tojson }}, {{ game.genre|default("")|tojson }}, {{ game.platform|default("")|tojson }}, {{ post.spoiler_level|default(0) }}, {{ post.content|default("")|tojson }})'>🎴 布教カード</button>
+                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default("")|tojson }}, {{ post.target_audience|default("")|tojson }}, {{ post.play_time|default("")|tojson }}, {{ post.username|default("名無しの布教者")|tojson }}, {{ game.genre|default("")|tojson }}, {{ game.platform|default("")|tojson }}, {{ post.spoiler_level|default(0) }}, {{ post.content|default("")|tojson }}, {{ game.image_url|default("")|tojson }})'>🎴 布教カード</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
