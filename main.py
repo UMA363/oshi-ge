@@ -381,7 +381,7 @@ INDEX_HTML = """
         <a class="quick-filter" href="/?q=一人">👤 一人で遊びたい</a>
         <a class="quick-filter" href="/?q=短時間">⏱ 短時間</a>
         <a class="quick-filter" href="/?q=ホラー">😱 ホラー</a>
-        <a class="quick-filter" href="/?q=インディー">💎 インディー</a>
+        <a class="quick-filter" href="/?genre=インディー">💎 インディー</a>
         <a class="quick-filter" href="/?q=初心者">🌱 初心者向け</a>
         <a class="quick-filter" href="/games/random">🎲 完全ランダム</a>
     </div>
@@ -519,7 +519,7 @@ GAME_HTML = """
             <div style="display: flex; gap: 0.5rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                <button type="button" class="btn btn-outline btn-small" onclick="openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }})">🎴 布教カード</button>
+                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }})'>🎴 布教カード</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
@@ -620,7 +620,7 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
             )
         )"""
         params.extend([search] * 6)
-    if genre: query += " AND g.genre = %s"; params.append(genre)
+    if genre: query += " AND TRIM(COALESCE(g.genre, '')) = TRIM(%s)"; params.append(genre)
     if platform: query += " AND g.platform ILIKE %s"; params.append('%' + platform + '%')
     
     with get_db_connection() as conn:
