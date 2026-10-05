@@ -118,6 +118,20 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .game-grid { grid-template-columns: 1fr; }
     .card { padding: 1rem; }
 }
+
+/* 探し方・布教カード追加 */
+.discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
+.discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
+.quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
+.quick-filter { display: flex; align-items: center; justify-content: center; min-height: 46px; padding: 0.6rem 0.8rem; background: #0f172a; border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); text-decoration: none; font-weight: bold; text-align: center; transition: 0.2s; }
+.quick-filter:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+.promo-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 9999; }
+.promo-modal-box { width: min(900px, 100%); max-height: 95vh; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 1rem; box-sizing: border-box; }
+.promo-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.8rem; }
+.promo-modal-head h3 { margin: 0; color: var(--accent); }
+.promo-canvas-wrap { background: #0b1120; border-radius: 10px; padding: 0.75rem; border: 1px solid var(--border); }
+#promoCanvas { display: block; width: 100%; height: auto; border-radius: 8px; }
+.promo-modal-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
 """
 
 JS = """
@@ -177,6 +191,130 @@ document.addEventListener("DOMContentLoaded", () => {
         h.closest('form').querySelectorAll('.platform-cb').forEach(cb => { if (p.includes(cb.value)) cb.checked = true; });
     });
 });
+
+function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform) {
+    const modal = document.getElementById('promo-card-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    modal.dataset.title = title || '';
+    modal.dataset.catchphrase = catchphrase || 'このゲーム、ぜひ遊んでほしい！';
+    modal.dataset.target = targetAudience || '';
+    modal.dataset.playTime = playTime || '';
+    modal.dataset.username = username || '名無しの布教者';
+    modal.dataset.genre = genre || '';
+    modal.dataset.platform = platform || '';
+    drawPromoCard();
+}
+
+function closePromoCard() {
+    const modal = document.getElementById('promo-card-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
+    const chars = Array.from(text || '');
+    let line = '';
+    const lines = [];
+    for (const ch of chars) {
+        const test = line + ch;
+        if (ctx.measureText(test).width > maxWidth && line) {
+            lines.push(line);
+            line = ch;
+            if (lines.length >= maxLines) break;
+        } else {
+            line = test;
+        }
+    }
+    if (lines.length < maxLines && line) lines.push(line);
+    if (lines.length === maxLines && lines.join('').length < chars.length) {
+        let last = lines[maxLines - 1] || '';
+        while (ctx.measureText(last + '…').width > maxWidth && last.length > 0) last = last.slice(0, -1);
+        lines[maxLines - 1] = last + '…';
+    }
+    lines.forEach((t, i) => ctx.fillText(t, x, y + i * lineHeight));
+    return lines.length;
+}
+
+function drawPromoCard() {
+    const modal = document.getElementById('promo-card-modal');
+    const canvas = document.getElementById('promoCanvas');
+    if (!modal || !canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = 1200, H = 630;
+    canvas.width = W;
+    canvas.height = H;
+
+    const bg = ctx.createLinearGradient(0, 0, W, H);
+    bg.addColorStop(0, '#0f172a');
+    bg.addColorStop(1, '#1e293b');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillRect(0, 0, W, 18);
+    ctx.fillRect(0, H - 18, W, 18);
+
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '900 34px Arial, sans-serif';
+    ctx.fillText('🎮 Oshi-Ge', 55, 72);
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '900 56px Arial, sans-serif';
+    wrapCanvasText(ctx, modal.dataset.title || 'おすすめゲーム', 55, 145, 1090, 64, 2);
+
+    const catchphraseY = 295;
+    ctx.fillStyle = '#0b1120';
+    ctx.fillRect(50, catchphraseY - 48, 1100, 150);
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(50, catchphraseY - 48, 1100, 150);
+
+    ctx.fillStyle = '#fcd34d';
+    ctx.font = '900 36px Arial, sans-serif';
+    wrapCanvasText(ctx, '「' + (modal.dataset.catchphrase || '') + '」', 80, catchphraseY, 1040, 48, 2);
+
+    let metaY = 485;
+    ctx.font = 'bold 24px Arial, sans-serif';
+    ctx.fillStyle = '#cbd5e1';
+    const meta = [];
+    if (modal.dataset.target) meta.push('🎯 ' + modal.dataset.target);
+    if (modal.dataset.playTime) meta.push('⏱ ' + modal.dataset.playTime);
+    if (modal.dataset.genre) meta.push('🎮 ' + modal.dataset.genre);
+    if (modal.dataset.platform) meta.push('💻 ' + modal.dataset.platform);
+    if (meta.length) wrapCanvasText(ctx, meta.join('　　'), 60, metaY, 1080, 34, 2);
+
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '20px Arial, sans-serif';
+    ctx.fillText('布教者：' + (modal.dataset.username || '名無しの布教者'), 60, 575);
+    ctx.fillText('ネタバレなしでゲームを探すなら Oshi-Ge', 660, 575);
+}
+
+function downloadPromoCard() {
+    const modal = document.getElementById('promo-card-modal');
+    const canvas = document.getElementById('promoCanvas');
+    if (!modal || !canvas) return;
+    const title = modal.dataset.title || 'oshi-ge';
+    const safeName = title.replace(/[\\/:*?"<>|]/g, '_');
+    const a = document.createElement('a');
+    a.download = `Oshi-Ge_${safeName}.png`;
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+}
+
+function sharePromoCardToX() {
+    const modal = document.getElementById('promo-card-modal');
+    if (!modal) return;
+    const title = modal.dataset.title || '';
+    const catchphrase = modal.dataset.catchphrase || '';
+    const text = encodeURIComponent(`『${title}』を布教します🎮\n「${catchphrase}」\n#OshiGe`);
+    const url = encodeURIComponent(window.location.href);
+    window.open(`https://x.com/intent/tweet?text=${text}&url=${url}`, '_blank');
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closePromoCard();
+});
+
 """
 
 BASE_HTML = """
@@ -234,6 +372,20 @@ BASE_HTML = """
 """
 
 INDEX_HTML = """
+<div class="discover-panel">
+    <h3>🔎 目的からゲームを探す</h3>
+    <div style="color: var(--text-sub); margin-bottom: 0.9rem;">タイトルを知らなくても大丈夫。気分や好みから探せます。</div>
+    <div class="quick-filter-grid">
+        <a class="quick-filter" href="/?q=ストーリー">📖 ストーリー重視</a>
+        <a class="quick-filter" href="/?q=泣ける">😭 泣ける</a>
+        <a class="quick-filter" href="/?q=一人">👤 一人で遊びたい</a>
+        <a class="quick-filter" href="/?q=短時間">⏱ 短時間</a>
+        <a class="quick-filter" href="/?q=ホラー">😱 ホラー</a>
+        <a class="quick-filter" href="/?q=インディー">💎 インディー</a>
+        <a class="quick-filter" href="/?q=初心者">🌱 初心者向け</a>
+        <a class="quick-filter" href="/games/random">🎲 完全ランダム</a>
+    </div>
+</div>
 <div class="layout-wrapper">
     <div class="main-column">
         <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
@@ -367,11 +519,28 @@ GAME_HTML = """
             <div style="display: flex; gap: 0.5rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'line')">LINE で共有</button>
+                <button type="button" class="btn btn-outline btn-small" onclick="openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }})">🎴 布教カード</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
     </div>
     {% else %}<div class="card" style="text-align: center; color: var(--text-sub); padding: 3rem 0; background: transparent; border: 1px dashed var(--border);"><p style="margin: 0;">まだ布教コメントがありません。<br>最初の布教者になりませんか？</p></div>{% endfor %}
+</div>
+
+<div id="promo-card-modal" class="promo-modal" style="display:none;" onclick="if(event.target===this) closePromoCard();">
+    <div class="promo-modal-box">
+        <div class="promo-modal-head">
+            <h3>🎴 布教カード</h3>
+            <button type="button" class="btn btn-outline btn-small" onclick="closePromoCard()">✕ 閉じる</button>
+        </div>
+        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="630"></canvas></div>
+        <div class="promo-modal-actions">
+            <button type="button" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
+            <button type="button" class="btn btn-x" onclick="sharePromoCardToX()">𝕏 Xで共有</button>
+            <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
+        </div>
+        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">画像を保存してXなどに投稿できます。共有ボタンはページURLも一緒に投稿します。</div>
+    </div>
 </div>
 """
 
@@ -434,7 +603,23 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
     if sort == "posts": order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
     query = f'''SELECT g.*, (SELECT catchphrase FROM posts p WHERE p.game_id = g.id ORDER BY p.created_at DESC LIMIT 1) as latest_catchphrase, (SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) as post_count FROM games g WHERE 1=1'''
     params = []
-    if q: query += " AND g.title ILIKE %s"; params.append('%' + q + '%')
+    if q:
+        search = '%' + q + '%'
+        query += """ AND (
+            g.title ILIKE %s
+            OR COALESCE(g.description, '') ILIKE %s
+            OR EXISTS (
+                SELECT 1 FROM posts sp
+                WHERE sp.game_id = g.id
+                AND (
+                    COALESCE(sp.catchphrase, '') ILIKE %s
+                    OR COALESCE(sp.target_audience, '') ILIKE %s
+                    OR COALESCE(sp.play_time, '') ILIKE %s
+                    OR COALESCE(sp.content, '') ILIKE %s
+                )
+            )
+        )"""
+        params.extend([search] * 6)
     if genre: query += " AND g.genre = %s"; params.append(genre)
     if platform: query += " AND g.platform ILIKE %s"; params.append('%' + platform + '%')
     
