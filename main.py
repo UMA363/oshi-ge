@@ -39,7 +39,7 @@ def init_db():
 
 init_db()
 
-# --- 2. HTML・CSS・JSテンプレート (全機能復元) ---
+# --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
 :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
 body { font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 0; line-height: 1.6; }
@@ -163,23 +163,22 @@ function sharePost(btn, platform) {
     const spoilerLevel = Number(btn.getAttribute('data-spoiler') || '0');
     const url = window.location.origin + '/games/' + gameId;
 
-    // X/LINEでは、ネタバレなしの投稿だけ感想の冒頭20文字を掲載する。
-    let text = `このゲーム、もっと知られてほしい。\n\n🎮 『${title}』`;
-    if (catchphrase) text += `\n\n「${catchphrase}」`;
+    let text = `このゲーム、もっと知られてほしい。\\n\\n🎮 『${title}』`;
+    if (catchphrase) text += `\\n\\n「${catchphrase}」`;
 
     if (spoilerLevel === 0 && content.trim()) {
         let impression = content.trim();
         if (Array.from(impression).length > 20) {
             impression = Array.from(impression).slice(0, 20).join('') + '…';
         }
-        text += `\n\n💬「${impression}」`;
+        text += `\\n\\n💬「${impression}」`;
     } else if (spoilerLevel === 1) {
-        text += `\n\n🔒 軽微なネタバレを含みます`;
+        text += `\\n\\n🔒 軽微なネタバレを含みます`;
     } else if (spoilerLevel === 2) {
-        text += `\n\n⚠️ ネタバレあり`;
+        text += `\\n\\n⚠️ ネタバレあり`;
     }
 
-    text += `\n\n布教内容はこちら👇\n${url}\n\n#OshiGe`;
+    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n#OshiGe`;
 
     if (platform === 'x') {
         window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
@@ -218,7 +217,12 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 });
 
-function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform, spoilerLevel) {
+// --- デバイス判定と布教カード生成 ---
+function isMobileDevice() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+}
+
+function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform, spoilerLevel, content) {
     const modal = document.getElementById('promo-card-modal');
     if (!modal) return;
     modal.style.display = 'flex';
@@ -230,6 +234,19 @@ function openPromoCard(title, catchphrase, targetAudience, playTime, username, g
     modal.dataset.genre = genre || '';
     modal.dataset.platform = platform || '';
     modal.dataset.spoiler = String(spoilerLevel || 0);
+    modal.dataset.content = content || '';
+    
+    // UIの切り替え（スマホならDLボタンを隠してスクショ案内）
+    const dlBtn = document.getElementById('promo-dl-btn');
+    const instruction = document.getElementById('promo-instruction');
+    if (isMobileDevice()) {
+        if(dlBtn) dlBtn.style.display = 'none';
+        if(instruction) instruction.innerHTML = '📱 <strong>スマホの方は、このカードをスクリーンショットで保存してください！</strong><br>SNSへの共有は各共有ボタンからどうぞ。';
+    } else {
+        if(dlBtn) dlBtn.style.display = 'inline-block';
+        if(instruction) instruction.innerHTML = 'このカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。';
+    }
+
     drawPromoCard();
 }
 
@@ -279,18 +296,22 @@ function drawPromoCard() {
     if (!modal || !canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const W = 1200, H = 800;
+    const W = 1200, H = 840;
     canvas.width = W;
     canvas.height = H;
 
     const title = modal.dataset.title || 'おすすめゲーム';
-    const catchphrase = modal.dataset.catchphrase || 'このゲーム、ぜひ遊んでほしい！';
+    const catchphrase = modal.dataset.catchphrase || '';
     const target = modal.dataset.target || '';
     const playTime = modal.dataset.playTime || '';
     const genre = modal.dataset.genre || '';
     const platform = modal.dataset.platform || '';
     const username = modal.dataset.username || '名無しの布教者';
     const spoiler = Number(modal.dataset.spoiler || 0);
+    let contentRaw = modal.dataset.content || '';
+
+    // ネタバレが含まれる場合は感想を強制非表示
+    if (spoiler > 0) contentRaw = '';
 
     // ===== 背景 =====
     const bg = ctx.createLinearGradient(0, 0, W, H);
@@ -300,14 +321,12 @@ function drawPromoCard() {
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
-    // 右上の装飾光
     const glow = ctx.createRadialGradient(1030, 100, 20, 1030, 100, 430);
     glow.addColorStop(0, 'rgba(245,158,11,0.22)');
     glow.addColorStop(1, 'rgba(245,158,11,0)');
     ctx.fillStyle = glow;
     ctx.fillRect(650, 0, 550, 500);
 
-    // 左側のアクセントライン
     ctx.fillStyle = '#f59e0b';
     ctx.fillRect(0, 0, 14, H);
 
@@ -323,9 +342,7 @@ function drawPromoCard() {
     // ===== タイトル =====
     ctx.fillStyle = '#ffffff';
     ctx.font = '900 58px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    const titleLines = wrapCanvasText(
-        ctx, title, 58, 158, 1080, 70, 2
-    );
+    const titleLines = wrapCanvasText(ctx, title, 58, 158, 1080, 70, 2);
 
     // ===== キャッチコピー =====
     const quoteY = 305 + Math.max(0, titleLines - 1) * 20;
@@ -342,21 +359,34 @@ function drawPromoCard() {
 
     ctx.fillStyle = '#fff7ed';
     ctx.font = '900 34px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    wrapCanvasText(
-        ctx, '「' + catchphrase + '」',
-        88, quoteY + 84, 1015, 46, 2
-    );
+    wrapCanvasText(ctx, '「' + catchphrase + '」', 88, quoteY + 84, 1015, 46, 2);
 
-    // ===== 下段メタ情報 =====
-    let y = quoteY + 195;
+    let y = quoteY + 185;
 
-    if (target) {
+    // ===== 感想（文字数判定による動的表示） =====
+    const cleanContent = contentRaw.replace(/\\s+/g, ' ').trim();
+    if (cleanContent.length >= 15) {
         ctx.fillStyle = '#cbd5e1';
         ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-        ctx.fillText('こんな人におすすめ', 60, y);
-        y += 34;
+        ctx.fillText('💬 布教者の声', 60, y);
+        y += 24;
 
-        drawRoundRect(ctx, 58, y, 1084, 58, 12);
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '400 24px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+        const linesDrawn = wrapCanvasText(ctx, cleanContent, 60, y + 6, 1080, 36, 3);
+        y += (linesDrawn * 36) + 30;
+    } else {
+        y += 10;
+    }
+
+    // ===== 下段メタ情報 =====
+    if (target) {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
+        ctx.fillText('おすすめ対象', 60, y);
+        y += 30;
+
+        drawRoundRect(ctx, 58, y, 1084, 52, 10);
         ctx.fillStyle = '#1e293b';
         ctx.fill();
         ctx.strokeStyle = '#334155';
@@ -365,7 +395,7 @@ function drawPromoCard() {
 
         ctx.fillStyle = '#f8fafc';
         ctx.font = '700 22px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-        wrapCanvasText(ctx, target, 82, y + 37, 1020, 28, 1);
+        wrapCanvasText(ctx, target, 78, y + 34, 1040, 28, 1);
         y += 76;
     }
 
@@ -409,55 +439,48 @@ function drawPromoCard() {
         ctx.font = '900 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
         const sw = ctx.measureText(spoilerText).width + 36;
 
-        drawRoundRect(ctx, 58, Math.min(y, 650), sw, 44, 22);
-        ctx.fillStyle = spoiler === 2
-            ? 'rgba(239,68,68,0.15)'
-            : 'rgba(245,158,11,0.15)';
+        drawRoundRect(ctx, 58, Math.min(y, 710), sw, 44, 22);
+        ctx.fillStyle = spoiler === 2 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)';
         ctx.fill();
-        ctx.strokeStyle = spoiler === 2
-            ? 'rgba(239,68,68,0.65)'
-            : 'rgba(245,158,11,0.65)';
+        ctx.strokeStyle = spoiler === 2 ? 'rgba(239,68,68,0.65)' : 'rgba(245,158,11,0.65)';
         ctx.stroke();
 
         ctx.fillStyle = spoiler === 2 ? '#fca5a5' : '#fde68a';
-        ctx.fillText(spoilerText, 76, Math.min(y, 650) + 29);
+        ctx.fillText(spoilerText, 76, Math.min(y, 710) + 29);
     }
 
     // ===== フッター =====
     ctx.strokeStyle = '#334155';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(58, 718);
-    ctx.lineTo(1142, 718);
+    ctx.moveTo(58, 770);
+    ctx.lineTo(1142, 770);
     ctx.stroke();
 
     ctx.fillStyle = '#64748b';
     ctx.font = '18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    ctx.fillText('布教者：' + username, 58, 754);
+    ctx.fillText('布教者：' + username, 58, 806);
 
     ctx.fillStyle = '#f59e0b';
     ctx.font = '900 20px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
     const brand = 'Oshi-Ge';
-    ctx.fillText(brand, 1142 - ctx.measureText(brand).width, 754);
+    ctx.fillText(brand, 1142 - ctx.measureText(brand).width, 806);
 }
 
 function downloadPromoCard() {
-    const modal = document.getElementById('promo-card-modal');
     const canvas = document.getElementById('promoCanvas');
-    if (!modal || !canvas) return;
-    const title = modal.dataset.title || 'oshi-ge';
-    const safeName = title.replace(/[\\/:*?"<>|]/g, '_');
+    if (!canvas) return;
+    const title = document.getElementById('promo-card-modal').dataset.title || 'oshi-ge';
+    const safeName = title.replace(/[\\\\/:*?"<>|]/g, '_');
     const a = document.createElement('a');
     a.download = `Oshi-Ge_${safeName}.png`;
     a.href = canvas.toDataURL('image/png');
     a.click();
 }
 
-
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closePromoCard();
 });
-
 """
 
 BASE_HTML = """
@@ -662,7 +685,7 @@ GAME_HTML = """
             <div style="display: flex; gap: 0.5rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }}, {{ post.spoiler_level|default(0) }})'>🎴 布教カード</button>
+                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default("")|tojson }}, {{ post.target_audience|default("")|tojson }}, {{ post.play_time|default("")|tojson }}, {{ post.username|default("名無しの布教者")|tojson }}, {{ game.genre|default("")|tojson }}, {{ game.platform|default("")|tojson }}, {{ post.spoiler_level|default(0) }}, {{ post.content|default("")|tojson }})'>🎴 布教カード</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
@@ -676,12 +699,14 @@ GAME_HTML = """
             <h3>🎴 布教カード</h3>
             <button type="button" class="btn btn-outline btn-small" onclick="closePromoCard()">✕ 閉じる</button>
         </div>
-        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="800"></canvas></div>
+        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="840"></canvas></div>
         <div class="promo-modal-actions">
-            <button type="button" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
+            <button type="button" id="promo-dl-btn" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
             <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
         </div>
-        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">このカードはSNSなどに載せる画像として保存できます。X・LINEの共有は各共有ボタンからどうぞ。</div>
+        <div id="promo-instruction" style="color:var(--text-sub); font-size:0.9rem; margin-top:0.7rem;">
+            このカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。
+        </div>
     </div>
 </div>
 """
