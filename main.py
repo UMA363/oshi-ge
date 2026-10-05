@@ -192,10 +192,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 });
 
-function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform) {
+function openPromoCard(gameId, title, catchphrase, targetAudience, playTime, username, genre, platform, content) {
     const modal = document.getElementById('promo-card-modal');
     if (!modal) return;
     modal.style.display = 'flex';
+    modal.dataset.gameId = gameId || '';
     modal.dataset.title = title || '';
     modal.dataset.catchphrase = catchphrase || 'このゲーム、ぜひ遊んでほしい！';
     modal.dataset.target = targetAudience || '';
@@ -203,6 +204,7 @@ function openPromoCard(title, catchphrase, targetAudience, playTime, username, g
     modal.dataset.username = username || '名無しの布教者';
     modal.dataset.genre = genre || '';
     modal.dataset.platform = platform || '';
+    modal.dataset.content = content || '';
     drawPromoCard();
 }
 
@@ -283,10 +285,24 @@ function drawPromoCard() {
     if (modal.dataset.platform) meta.push('💻 ' + modal.dataset.platform);
     if (meta.length) wrapCanvasText(ctx, meta.join('　　'), 60, metaY, 1080, 34, 2);
 
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '20px Arial, sans-serif';
-    ctx.fillText('布教者：' + (modal.dataset.username || '名無しの布教者'), 60, 575);
-    ctx.fillText('ネタバレなしでゲームを探すなら Oshi-Ge', 660, 575);
+    // 長文感想をカードにも掲載。収まりきらない場合は「続きを読む」にする
+    const content = modal.dataset.content || '';
+    if (content) {
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = 'bold 23px Arial, sans-serif';
+        ctx.fillText('💬 布教者の感想', 60, 535);
+        ctx.font = '20px Arial, sans-serif';
+        wrapCanvasText(ctx, content, 60, 570, 1080, 30, 2);
+        if (Array.from(content).length > 82) {
+            ctx.fillStyle = '#fcd34d';
+            ctx.font = 'bold 18px Arial, sans-serif';
+            ctx.fillText('……続きを読む → Oshi-Ge', 930, 610);
+        }
+    } else {
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '20px Arial, sans-serif';
+        ctx.fillText('布教者：' + (modal.dataset.username || '名無しの布教者'), 60, 575);
+    }
 }
 
 function downloadPromoCard() {
@@ -517,9 +533,9 @@ GAME_HTML = """
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
             <div style="display: flex; gap: 0.5rem;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
-                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }})'>🎴 布教カード</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content|e }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
+                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content|e }}" onclick="sharePost(this, 'line')">LINE で共有</button>
+                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.id }}, {{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }}, {{ post.content|default('')|tojson }})'>🎴 布教カード</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
@@ -536,10 +552,11 @@ GAME_HTML = """
         <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="630"></canvas></div>
         <div class="promo-modal-actions">
             <button type="button" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
-            <button type="button" class="btn btn-x" onclick="sharePromoCardToX()">𝕏 Xで共有</button>
+            <button type="button" class="btn btn-x" onclick="sharePromoCard('x')">𝕏 Xに投稿</button>
+            <button type="button" class="btn btn-line" onclick="sharePromoCard('line')">LINEで送る</button>
             <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
         </div>
-        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">画像を保存してXなどに投稿できます。共有ボタンはページURLも一緒に投稿します。</div>
+        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">X：スマホでは画像＋文章をそのまま共有。PCでは画像を自動保存してX投稿画面を開きます。LINEは文章＋サイトURLを送れます。</div>
     </div>
 </div>
 """
