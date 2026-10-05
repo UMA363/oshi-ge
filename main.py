@@ -154,12 +154,26 @@ function shareGameToLine(title) {
 }
 function sharePost(btn, platform) {
     const gameId = btn.getAttribute('data-id');
-    const title = btn.getAttribute('data-title');
-    const catchphrase = btn.getAttribute('data-catch') || '最高におすすめのゲームです';
-    const text = encodeURIComponent(`「${catchphrase}」\\n私の推しゲーム『${title}』を布教します。未プレイの方はぜひ！👇\\n#OshiGe\\n`);
-    const url = encodeURIComponent(window.location.origin + '/games/' + gameId);
-    if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${text}&url=${url}`, '_blank');
-    else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${text}${url}`, '_blank');
+    const title = btn.getAttribute('data-title') || 'おすすめゲーム';
+    const catchphrase = btn.getAttribute('data-catch') || '';
+    const content = btn.getAttribute('data-content') || '';
+    const url = window.location.origin + '/games/' + gameId;
+
+    // 感想は長すぎるとSNSで読みづらいので、冒頭だけを抜き出す。
+    let impression = content.replace(/\\s+$/,'').trim();
+    const maxChars = 20;
+    if (impression.length > maxChars) impression = impression.slice(0, maxChars) + '…';
+
+    let text = `このゲーム、もっと知られてほしい。\n\n🎮 『${title}』`;
+    if (catchphrase) text += `\n\n「${catchphrase}」`;
+    if (impression) text += `\n\n「${impression}」`;
+    text += `\n\nネタバレなしの布教内容はこちら👇\n${url}\n\n#OshiGe`;
+
+    if (platform === 'x') {
+        window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
+    } else if (platform === 'line') {
+        window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
+    }
 }
 async function likePost(gId, pId, btn) {
     if (btn.classList.contains('liked')) return;
@@ -192,11 +206,10 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 });
 
-function openPromoCard(gameId, title, catchphrase, targetAudience, playTime, username, genre, platform, content) {
+function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform) {
     const modal = document.getElementById('promo-card-modal');
     if (!modal) return;
     modal.style.display = 'flex';
-    modal.dataset.gameId = gameId || '';
     modal.dataset.title = title || '';
     modal.dataset.catchphrase = catchphrase || 'このゲーム、ぜひ遊んでほしい！';
     modal.dataset.target = targetAudience || '';
@@ -204,7 +217,6 @@ function openPromoCard(gameId, title, catchphrase, targetAudience, playTime, use
     modal.dataset.username = username || '名無しの布教者';
     modal.dataset.genre = genre || '';
     modal.dataset.platform = platform || '';
-    modal.dataset.content = content || '';
     drawPromoCard();
 }
 
@@ -242,79 +254,53 @@ function drawPromoCard() {
     const canvas = document.getElementById('promoCanvas');
     if (!modal || !canvas) return;
     const ctx = canvas.getContext('2d');
-    const W = 1200, H = 800;
-    canvas.width = W; canvas.height = H;
+    const W = 1200, H = 630;
+    canvas.width = W;
+    canvas.height = H;
 
     const bg = ctx.createLinearGradient(0, 0, W, H);
-    bg.addColorStop(0, '#0f172a'); bg.addColorStop(1, '#1e293b');
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-    ctx.fillStyle = '#f59e0b'; ctx.fillRect(0, 0, W, 18); ctx.fillRect(0, H - 18, W, 18);
+    bg.addColorStop(0, '#0f172a');
+    bg.addColorStop(1, '#1e293b');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
 
-    ctx.fillStyle = '#f59e0b'; ctx.font = '900 34px Arial, sans-serif';
-    ctx.fillText('🎮 Oshi-Ge', 55, 68);
+    ctx.fillStyle = '#f59e0b';
+    ctx.fillRect(0, 0, W, 18);
+    ctx.fillRect(0, H - 18, W, 18);
 
-    // タイトル：最大2行
-    ctx.fillStyle = '#f8fafc'; ctx.font = '900 52px Arial, sans-serif';
-    wrapCanvasText(ctx, modal.dataset.title || 'おすすめゲーム', 55, 135, 1090, 62, 2);
+    ctx.fillStyle = '#f59e0b';
+    ctx.font = '900 34px Arial, sans-serif';
+    ctx.fillText('🎮 Oshi-Ge', 55, 72);
 
-    // キャッチコピー枠
-    const catchY = 250;
-    ctx.fillStyle = '#0b1120'; ctx.fillRect(50, catchY - 42, 1100, 130);
-    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 3; ctx.strokeRect(50, catchY - 42, 1100, 130);
-    ctx.fillStyle = '#fcd34d'; ctx.font = '900 34px Arial, sans-serif';
-    wrapCanvasText(ctx, '「' + (modal.dataset.catchphrase || '') + '」', 78, catchY + 4, 1040, 44, 2);
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = '900 56px Arial, sans-serif';
+    wrapCanvasText(ctx, modal.dataset.title || 'おすすめゲーム', 55, 145, 1090, 64, 2);
 
-    // メタ情報
-    let y = 335;
-    ctx.font = 'bold 23px Arial, sans-serif'; ctx.fillStyle = '#cbd5e1';
+    const catchphraseY = 295;
+    ctx.fillStyle = '#0b1120';
+    ctx.fillRect(50, catchphraseY - 48, 1100, 150);
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(50, catchphraseY - 48, 1100, 150);
+
+    ctx.fillStyle = '#fcd34d';
+    ctx.font = '900 36px Arial, sans-serif';
+    wrapCanvasText(ctx, '「' + (modal.dataset.catchphrase || '') + '」', 80, catchphraseY, 1040, 48, 2);
+
+    let metaY = 485;
+    ctx.font = 'bold 24px Arial, sans-serif';
+    ctx.fillStyle = '#cbd5e1';
     const meta = [];
     if (modal.dataset.target) meta.push('🎯 ' + modal.dataset.target);
     if (modal.dataset.playTime) meta.push('⏱ ' + modal.dataset.playTime);
     if (modal.dataset.genre) meta.push('🎮 ' + modal.dataset.genre);
     if (modal.dataset.platform) meta.push('💻 ' + modal.dataset.platform);
-    for (const m of meta) {
-        const lines = wrapCanvasText(ctx, m, 65, y, 1070, 32, 1);
-        y += 38 * lines;
-    }
+    if (meta.length) wrapCanvasText(ctx, meta.join('　　'), 60, metaY, 1080, 34, 2);
 
-    // 感想欄を独立させ、メタ情報と絶対に重ならないようにする
-    const reviewTop = Math.max(y + 18, 430);
-    const reviewH = 270;
-    ctx.fillStyle = 'rgba(11,17,32,0.9)'; ctx.fillRect(50, reviewTop, 1100, reviewH);
-    ctx.strokeStyle = '#334155'; ctx.lineWidth = 2; ctx.strokeRect(50, reviewTop, 1100, reviewH);
-    ctx.fillStyle = '#f8fafc'; ctx.font = 'bold 24px Arial, sans-serif';
-    ctx.fillText('💬 布教者の感想', 75, reviewTop + 42);
-
-    const content = modal.dataset.content || '';
-    ctx.fillStyle = '#e2e8f0'; ctx.font = '20px Arial, sans-serif';
-    if (content) {
-        const chars = Array.from(content.replace(/\\s+$/,''));
-        let line = '', lines = [];
-        const maxLines = 5, maxWidth = 1040;
-        for (const ch of chars) {
-            const test = line + ch;
-            if (ctx.measureText(test).width > maxWidth && line) { lines.push(line); line = ch; if (lines.length >= maxLines) break; }
-            else line = test;
-        }
-        if (lines.length < maxLines && line) lines.push(line);
-        const truncated = lines.join('').length < chars.length;
-        if (truncated && lines.length) {
-            let last = lines[lines.length - 1];
-            while (ctx.measureText(last + '…').width > maxWidth && last.length) last = last.slice(0, -1);
-            lines[lines.length - 1] = last + '…';
-        }
-        lines.forEach((line, i) => ctx.fillText(line, 75, reviewTop + 82 + i * 32));
-        if (truncated) {
-            ctx.fillStyle = '#fcd34d'; ctx.font = 'bold 18px Arial, sans-serif';
-            ctx.fillText('続きを読む → Oshi-Ge', 900, reviewTop + reviewH - 24);
-        }
-    } else {
-        ctx.fillStyle = '#94a3b8'; ctx.font = '20px Arial, sans-serif';
-        ctx.fillText('布教者：' + (modal.dataset.username || '名無しの布教者'), 75, reviewTop + 82);
-    }
-
-    ctx.fillStyle = '#94a3b8'; ctx.font = '18px Arial, sans-serif';
-    ctx.fillText('ネタバレなしでゲームを探すなら Oshi-Ge', 75, H - 42);
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '20px Arial, sans-serif';
+    ctx.fillText('布教者：' + (modal.dataset.username || '名無しの布教者'), 60, 575);
+    ctx.fillText('ネタバレなしでゲームを探すなら Oshi-Ge', 660, 575);
 }
 
 function downloadPromoCard() {
@@ -329,55 +315,6 @@ function downloadPromoCard() {
     a.click();
 }
 
-async function sharePromoCard(platform) {
-    const modal = document.getElementById('promo-card-modal');
-    const canvas = document.getElementById('promoCanvas');
-    if (!modal || !canvas) return;
-
-    const title = modal.dataset.title || 'おすすめゲーム';
-    const catchphrase = modal.dataset.catchphrase || '';
-    const gameId = modal.dataset.gameId || '';
-    const url = `${window.location.origin}/games/${gameId}`;
-    const text = `『${title}』を布教します🎮\\n「${catchphrase}」\\n#OshiGe\\n${url}`;
-    const encodedText = encodeURIComponent(text);
-
-    let targetUrl = '';
-    if (platform === 'x') targetUrl = `https://x.com/intent/tweet?text=${encodedText}`;
-    else if (platform === 'line') targetUrl = `https://line.me/R/msg/text/?${encodedText}`;
-
-    // 1. スマホの場合：ネイティブの共有メニュー（アプリ連携）を優先
-    if (navigator.share && navigator.canShare) {
-        try {
-            const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-            if (blob) {
-                const safeName = title.replace(/[\\\\/:*?"<>|]/g, '_');
-                const file = new File([blob], `OshiGe_Card.png`, { type: 'image/png' });
-                if (navigator.canShare({ files: [file] })) {
-                    await navigator.share({ files: [file], text: text });
-                    return;
-                }
-            }
-        } catch (e) {
-            if (e && e.name === 'AbortError') return;
-        }
-    }
-
-    // 2. PCの場合：ポップアップブロックを避けるためにまず空タブを開く
-    const newTab = window.open('about:blank', '_blank');
-
-    // 3. クリップボードに画像を自動コピーし、手動で貼り付けてもらう
-    try {
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        alert("📸 布教カードをコピーしました！\\n\\n開いた画面で「貼り付け（Ctrl+V または Cmd+V）」をして画像を添付してください。");
-        newTab.location.href = targetUrl;
-    } catch (e) {
-        // コピーに失敗した場合（HTTP環境など）はダウンロードで代替
-        downloadPromoCard();
-        alert("📸 布教カードを保存しました。\\n開いた画面で画像を添付してください。");
-        newTab.location.href = targetUrl;
-    }
-}
 
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closePromoCard();
@@ -449,7 +386,7 @@ INDEX_HTML = """
         <a class="quick-filter" href="/?q=一人">👤 一人で遊びたい</a>
         <a class="quick-filter" href="/?q=短時間">⏱ 短時間</a>
         <a class="quick-filter" href="/?q=ホラー">😱 ホラー</a>
-        <a class="quick-filter" href="/?genre=インディー">💎 インディー</a>
+        <a class="quick-filter" href="/?q=インディー">💎 インディー</a>
         <a class="quick-filter" href="/?q=初心者">🌱 初心者向け</a>
         <a class="quick-filter" href="/games/random">🎲 完全ランダム</a>
     </div>
@@ -582,12 +519,11 @@ GAME_HTML = """
         {% if post.spoiler_level == 0 %}<div><span class="spoiler-badge safe">🔐 ネタバレなしの詳細</span><div class="post-content"><p>{{ post.content }}</p></div></div>
         {% elif post.spoiler_level == 1 %}<div><button type="button" class="spoiler-toggle-btn warning" onclick="toggleSpoiler(this)">🔒 軽微なネタバレの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>
         {% elif post.spoiler_level == 2 %}<div><button type="button" class="spoiler-toggle-btn danger" onclick="toggleSpoiler(this)">⚠ ネタバレありの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>{% endif %}
-        
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
             <div style="display: flex; gap: 0.5rem;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content|e }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
-                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content|e }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.id }}, {{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }}, {{ post.content|default('')|tojson }})'>🎴 布教カード</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
+                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" onclick="sharePost(this, 'line')">LINE で共有</button>
+                <button type="button" class="btn btn-outline btn-small" onclick="openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default('')|tojson }}, {{ post.target_audience|default('')|tojson }}, {{ post.play_time|default('')|tojson }}, {{ post.username|default('名無しの布教者')|tojson }}, {{ game.genre|default('')|tojson }}, {{ game.platform|default('')|tojson }})">🎴 布教カード</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
@@ -601,14 +537,12 @@ GAME_HTML = """
             <h3>🎴 布教カード</h3>
             <button type="button" class="btn btn-outline btn-small" onclick="closePromoCard()">✕ 閉じる</button>
         </div>
-        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="800"></canvas></div>
+        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="630"></canvas></div>
         <div class="promo-modal-actions">
             <button type="button" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
-            <button type="button" class="btn btn-x" onclick="sharePromoCard('x')">𝕏 Xに投稿</button>
-            <button type="button" class="btn btn-line" onclick="sharePromoCard('line')">LINEで送る</button>
             <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
         </div>
-        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">X：スマホでは画像＋文章をそのまま共有。PCでは画像を自動保存してX投稿画面を開きます。LINEは文章＋サイトURLを送れます。</div>
+        <div style="color:var(--text-sub); font-size:0.85rem; margin-top:0.7rem;">布教カードは画像として保存できます。X・LINEでの共有は、各布教コメントの共有ボタンをご利用ください。</div>
     </div>
 </div>
 """
@@ -646,8 +580,8 @@ MYPAGE_HTML = """
             {% if post.catchphrase %}<div class="catchphrase-text" style="font-size: 1.1rem; margin-bottom: 0.5rem;">「{{ post.catchphrase }}」</div>{% endif %}
             <div style="color: var(--text-sub); font-size: 0.9rem; margin-bottom: 1rem;">👍 いいね: {{ post.likes | default(0) }}</div>
             <div style="display: flex; gap: 0.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
-                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" onclick="sharePost(this, 'line')">LINE で共有</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
+                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" onclick="sharePost(this, 'line')">LINE で共有</button>
             </div>
         </div>
         {% else %}
@@ -689,7 +623,7 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
             )
         )"""
         params.extend([search] * 6)
-    if genre: query += " AND TRIM(COALESCE(g.genre, '')) = TRIM(%s)"; params.append(genre)
+    if genre: query += " AND g.genre = %s"; params.append(genre)
     if platform: query += " AND g.platform ILIKE %s"; params.append('%' + platform + '%')
     
     with get_db_connection() as conn:
@@ -712,7 +646,6 @@ async def create_game(title: str = Form(...), description: str = Form(""), genre
     with get_db_connection() as conn:
         if conn.execute('SELECT id FROM games WHERE LOWER(title) = LOWER(%s)', (title,)).fetchone():
             return render_page(NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, image_url=image_url)
-        
         cursor = conn.execute('INSERT INTO games (title, description, genre, platform, image_url) VALUES (%s, %s, %s, %s, %s) RETURNING id', (title, description, genre, platform, image_url))
         game_id = cursor.fetchone()["id"]
         conn.commit()
@@ -750,7 +683,6 @@ async def create_post(request: Request, game_id: int, username: str = Form(...),
         cursor = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level))
         post_id = cursor.fetchone()["id"]
         conn.commit()
-        
     res = RedirectResponse(url=f"/games/{game_id}", status_code=303)
     c = request.cookies.get("my_posts", "")
     res.set_cookie(key="my_posts", value=f"{c},{post_id}" if c else str(post_id), max_age=60*60*24*365)
