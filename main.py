@@ -61,7 +61,10 @@ main { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
 .layout-wrapper { display: flex; gap: 2rem; align-items: flex-start; }
 .main-column { flex: 1; min-width: 0; }
 .sidebar-column { width: 320px; flex-shrink: 0; }
-@media (max-width: 850px) { .layout-wrapper { flex-direction: column; } .sidebar-column { width: 100%; } }
+@media (max-width: 850px) { 
+    .layout-wrapper { flex-direction: column; } 
+    .sidebar-column { width: 100%; order: -1; margin-bottom: 1.5rem; } 
+}
 .card { background: var(--card-bg); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
 h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-weight: bold; transition: all 0.2s; font-size: 1rem; }
