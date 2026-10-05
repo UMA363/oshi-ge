@@ -236,7 +236,6 @@ function openPromoCard(title, catchphrase, targetAudience, playTime, username, g
     modal.dataset.spoiler = String(spoilerLevel || 0);
     modal.dataset.content = content || '';
     
-    // UIの切り替え（スマホならDLボタンを隠してスクショ案内）
     const dlBtn = document.getElementById('promo-dl-btn');
     const instruction = document.getElementById('promo-instruction');
     if (isMobileDevice()) {
@@ -296,7 +295,7 @@ function drawPromoCard() {
     if (!modal || !canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const W = 1200, H = 840;
+    const W = 1200, H = 960; // 高さを960へ拡張
     canvas.width = W;
     canvas.height = H;
 
@@ -361,7 +360,7 @@ function drawPromoCard() {
     ctx.font = '900 34px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
     wrapCanvasText(ctx, '「' + catchphrase + '」', 88, quoteY + 84, 1015, 46, 2);
 
-    let y = quoteY + 185;
+    let y = quoteY + 200;
 
     // ===== 感想（文字数判定による動的表示） =====
     const cleanContent = contentRaw.replace(/\\s+/g, ' ').trim();
@@ -369,12 +368,12 @@ function drawPromoCard() {
         ctx.fillStyle = '#cbd5e1';
         ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
         ctx.fillText('💬 布教者の声', 60, y);
-        y += 24;
+        y += 28;
 
         ctx.fillStyle = '#f8fafc';
         ctx.font = '400 24px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
         const linesDrawn = wrapCanvasText(ctx, cleanContent, 60, y + 6, 1080, 36, 3);
-        y += (linesDrawn * 36) + 30;
+        y += (linesDrawn * 36) + 36;
     } else {
         y += 10;
     }
@@ -396,7 +395,7 @@ function drawPromoCard() {
         ctx.fillStyle = '#f8fafc';
         ctx.font = '700 22px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
         wrapCanvasText(ctx, target, 78, y + 34, 1040, 28, 1);
-        y += 76;
+        y += 82;
     }
 
     // 情報チップ
@@ -427,7 +426,7 @@ function drawPromoCard() {
             ctx.fillText(chip, x + 19, y + 31);
             x += width + 12;
         }
-        y += 66;
+        y += 72;
     }
 
     // ===== ネタバレ表示 =====
@@ -439,32 +438,36 @@ function drawPromoCard() {
         ctx.font = '900 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
         const sw = ctx.measureText(spoilerText).width + 36;
 
-        drawRoundRect(ctx, 58, Math.min(y, 710), sw, 44, 22);
+        drawRoundRect(ctx, 58, Math.min(y, H - 150), sw, 44, 22);
         ctx.fillStyle = spoiler === 2 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)';
         ctx.fill();
         ctx.strokeStyle = spoiler === 2 ? 'rgba(239,68,68,0.65)' : 'rgba(245,158,11,0.65)';
         ctx.stroke();
 
         ctx.fillStyle = spoiler === 2 ? '#fca5a5' : '#fde68a';
-        ctx.fillText(spoilerText, 76, Math.min(y, 710) + 29);
+        ctx.fillText(spoilerText, 76, Math.min(y, H - 150) + 29);
+        y += 72;
     }
 
     // ===== フッター =====
+    // 描画要素が下まで伸びた場合、フッターが自動で下へ逃げる処理を追加
+    const footerY = Math.max(y + 20, H - 90);
+
     ctx.strokeStyle = '#334155';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(58, 770);
-    ctx.lineTo(1142, 770);
+    ctx.moveTo(58, footerY);
+    ctx.lineTo(1142, footerY);
     ctx.stroke();
 
     ctx.fillStyle = '#64748b';
     ctx.font = '18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    ctx.fillText('布教者：' + username, 58, 806);
+    ctx.fillText('布教者：' + username, 58, footerY + 36);
 
     ctx.fillStyle = '#f59e0b';
     ctx.font = '900 20px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
     const brand = 'Oshi-Ge';
-    ctx.fillText(brand, 1142 - ctx.measureText(brand).width, 806);
+    ctx.fillText(brand, 1142 - ctx.measureText(brand).width, footerY + 36);
 }
 
 function downloadPromoCard() {
@@ -699,7 +702,7 @@ GAME_HTML = """
             <h3>🎴 布教カード</h3>
             <button type="button" class="btn btn-outline btn-small" onclick="closePromoCard()">✕ 閉じる</button>
         </div>
-        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="840"></canvas></div>
+        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="960"></canvas></div>
         <div class="promo-modal-actions">
             <button type="button" id="promo-dl-btn" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
             <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
