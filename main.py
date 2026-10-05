@@ -106,6 +106,18 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
+
+/* スマホ用レイアウト調整CSS */
+@media (max-width: 600px) {
+    .header-container { flex-direction: column; gap: 1rem; text-align: center; padding: 1rem; }
+    .header-container h1 { font-size: 1.5rem; }
+    .hero { padding: 2rem 1rem; }
+    .hero h2 { font-size: 1.8rem; }
+    .search-inputs { flex-direction: column; }
+    .search-inputs input, .search-inputs select, .search-inputs button { width: 100%; box-sizing: border-box; }
+    .game-grid { grid-template-columns: 1fr; }
+    .card { padding: 1rem; }
+}
 """
 
 JS = """
@@ -172,6 +184,7 @@ BASE_HTML = """
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Oshi-Ge | ネタバレなしゲーム布教サイト</title>
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-XRFBSR9HSR"></script>
