@@ -1,5 +1,6 @@
 fastapi
-uvicorn[standard]
+uvicorn
 jinja2
+psycopg
 python-multipart
-psycopg[binary]
+Pillow
