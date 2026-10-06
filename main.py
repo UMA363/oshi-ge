@@ -3,6 +3,7 @@ import urllib.request
 import uvicorn
 import base64
 import uuid
+from typing import List
 from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Template
@@ -19,7 +20,6 @@ def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row, sslmode="require")
 
 def upload_image_to_supabase(base64_data: str) -> str:
-    """Base64画像を受け取り、Supabase Storageにアップロードして公開URLを返す"""
     if not base64_data or not SUPABASE_URL or not SUPABASE_KEY: return ""
     try:
         header, encoded = base64_data.split(",", 1)
@@ -52,12 +52,14 @@ def init_db():
                 content TEXT NOT NULL, spoiler_level INTEGER DEFAULT 0, catchphrase TEXT,
                 target_audience TEXT, play_time TEXT, likes INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             
+            # カラムの追加（推しポイント機能の追加）
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS target_audience TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS play_time TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS likes INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS oshi_points TEXT DEFAULT ''")
             conn.commit()
     except Exception as e:
         print("DB Init error:", e)
@@ -126,6 +128,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .radio-header { display: flex; align-items: center; font-weight: bold; font-size: 1.05rem; }
 .tag { display: inline-block; background: #334155; color: #e2e8f0; padding: 0.3rem 0.8rem; border-radius: 9999px; font-size: 0.85rem; font-weight: bold; margin-bottom: 0.5rem; margin-right: 0.5rem; }
 .tag.genre { background: rgba(245, 158, 11, 0.2); color: var(--accent); border: 1px solid rgba(245, 158, 11, 0.3); }
+.tag.oshi-point { background: rgba(236, 72, 153, 0.15); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.4); }
 .game-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.5rem; }
 .game-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; transition: transform 0.2s; display: flex; flex-direction: column; cursor: pointer; }
 .game-card:hover { transform: translateY(-4px); border-color: var(--accent); }
@@ -147,7 +150,6 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
 
-/* 検索ボタンのハイライト実装 */
 .quick-filter.active { background-color: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 6px rgba(245,158,11,0.2); }
 
 @media (max-width: 600px) {
@@ -177,8 +179,6 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .promo-canvas-wrap { background: #0b1120; border-radius: 10px; padding: 0.75rem; border: 1px solid var(--border); }
 #promoCanvas { display: block; width: 100%; height: auto; border-radius: 8px; }
 .promo-modal-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
-
-/* Cropper用のスタイル微調整 */
 .cropper-view-box, .cropper-face { border-radius: 4px; }
 """
 
@@ -254,7 +254,6 @@ async function toggleBookmark(gId, btn) {
 function updatePlatform(f) { f.querySelector('.platform-hidden').value = Array.from(f.querySelectorAll('.platform-cb:checked')).map(cb => cb.value).join(','); }
 
 let cropper = null;
-
 function applyCrop() {
     if (!cropper) return;
     const canvas = cropper.getCroppedCanvas({ maxWidth: 800, maxHeight: 800 });
@@ -264,7 +263,6 @@ function applyCrop() {
     document.getElementById('image_preview').style.display = 'block';
     closeCropModal();
 }
-
 function closeCropModal() {
     document.getElementById('crop_modal').style.display = 'none';
     if (cropper) { cropper.destroy(); cropper = null; }
@@ -303,11 +301,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 });
 
-function isMobileDevice() {
-    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-}
+function isMobileDevice() { return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent); }
 
-function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform, spoilerLevel, content, imageUrl) {
+function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform, spoilerLevel, content, imageUrl, oshiPoints) {
     const modal = document.getElementById('promo-card-modal');
     if (!modal) return;
     modal.style.display = 'flex';
@@ -321,6 +317,7 @@ function openPromoCard(title, catchphrase, targetAudience, playTime, username, g
     modal.dataset.spoiler = String(spoilerLevel || 0);
     modal.dataset.content = content || '';
     modal.dataset.imageUrl = imageUrl || ''; 
+    modal.dataset.oshiPoints = oshiPoints || '';
     
     const dlBtn = document.getElementById('promo-dl-btn');
     const instruction = document.getElementById('promo-instruction');
@@ -333,7 +330,6 @@ function openPromoCard(title, catchphrase, targetAudience, playTime, username, g
     }
     drawPromoCard();
 }
-
 function closePromoCard() {
     const modal = document.getElementById('promo-card-modal');
     if (modal) modal.style.display = 'none';
@@ -393,6 +389,7 @@ async function drawPromoCard() {
     const username = modal.dataset.username || '名無しの布教者';
     const spoiler = Number(modal.dataset.spoiler || 0);
     const imageUrl = modal.dataset.imageUrl || '';
+    const oshiPoints = modal.dataset.oshiPoints || '';
     let contentRaw = modal.dataset.content || '';
 
     if (spoiler > 0) contentRaw = '';
@@ -410,11 +407,7 @@ async function drawPromoCard() {
             img.crossOrigin = 'Anonymous'; 
             img.src = '/proxy-image?url=' + encodeURIComponent(imageUrl);
             
-            await new Promise((resolve, reject) => {
-                img.onload = resolve;
-                img.onerror = reject;
-            });
-            
+            await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
             const imgRatio = img.width / img.height;
             const targetRatio = W / 550;
             let drawW, drawH, drawX, drawY;
@@ -441,14 +434,8 @@ async function drawPromoCard() {
             fade.addColorStop(1, '#0f172a');
             ctx.fillStyle = fade;
             ctx.fillRect(0, 0, W, 550);
-            
-        } catch(e) {
-            console.error("Image load failed", e);
-            drawFallbackGlow(ctx);
-        }
-    } else {
-        drawFallbackGlow(ctx);
-    }
+        } catch(e) { drawFallbackGlow(ctx); }
+    } else { drawFallbackGlow(ctx); }
 
     function drawFallbackGlow(ctx) {
         const glow = ctx.createRadialGradient(1030, 100, 20, 1030, 100, 430);
@@ -460,8 +447,6 @@ async function drawPromoCard() {
 
     ctx.fillStyle = '#f59e0b';
     ctx.fillRect(0, 0, 14, H);
-
-    ctx.fillStyle = '#f59e0b';
     ctx.font = '900 28px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
     ctx.fillText('OSHI-GE', 58, 62);
     ctx.fillStyle = '#cbd5e1';
@@ -504,9 +489,7 @@ async function drawPromoCard() {
         ctx.font = '400 24px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
         const linesDrawn = wrapCanvasText(ctx, cleanContent, 60, y + 6, 1080, 36, 3);
         y += (linesDrawn * 36) + 36;
-    } else {
-        y += 10;
-    }
+    } else { y += 10; }
 
     if (target) {
         ctx.fillStyle = '#94a3b8';
@@ -531,6 +514,7 @@ async function drawPromoCard() {
     if (playTime) chips.push('PLAY ' + playTime);
     if (genre) chips.push(genre);
     if (platform) chips.push(platform);
+    if (oshiPoints) oshiPoints.split(',').filter(Boolean).slice(0, 2).forEach(p => chips.push(p));
 
     if (chips.length) {
         let x = 58;
@@ -538,10 +522,7 @@ async function drawPromoCard() {
 
         for (const chip of chips) {
             const width = Math.min(340, Math.max(105, ctx.measureText(chip).width + 38));
-            if (x + width > 1142) {
-                x = 58;
-                y += 66;
-            }
+            if (x + width > 1142) { x = 58; y += 66; }
 
             drawRoundRect(ctx, x, y, width, 48, 24);
             ctx.fillStyle = '#172033';
@@ -549,7 +530,6 @@ async function drawPromoCard() {
             ctx.strokeStyle = '#475569';
             ctx.lineWidth = 1;
             ctx.stroke();
-
             ctx.fillStyle = '#cbd5e1';
             ctx.fillText(chip, x + 19, y + 31);
             x += width + 12;
@@ -599,10 +579,7 @@ function downloadPromoCard() {
     a.href = canvas.toDataURL('image/png');
     a.click();
 }
-
-document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closePromoCard();
-});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePromoCard(); });
 """
 
 BASE_HTML = """
@@ -634,7 +611,6 @@ BASE_HTML = """
     
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6608111802250449" crossorigin="anonymous"></script>
     
-    <!-- Cropper.js (画像切り抜きライブラリ) -->
     <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 
@@ -673,7 +649,6 @@ BASE_HTML = """
     {% endif %}
     <main>{{ content }}</main>
 
-    <!-- 画像切り抜き用モーダル -->
     <div id="crop_modal" class="promo-modal" style="display:none; z-index: 10000;">
         <div class="promo-modal-box" style="width: min(600px, 100%); background: var(--bg-color);">
             <div class="promo-modal-head">
@@ -799,11 +774,24 @@ GAME_HTML = """
         <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
         <div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
             <div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" required placeholder="例：最後まで遊んだときに、やってよかったと思える作品" style="border-color: rgba(245, 158, 11, 0.5);"></div>
-            <div style="display: flex; gap: 1rem; margin-bottom: 0; flex-wrap: wrap;">
+            <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
                 <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" placeholder="例：ストーリー重視の人"></div>
                 <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" placeholder="例：10～15時間"></div>
             </div>
+            
+            <div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">
+                    {% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}
+                    {% for pt in points %}
+                    <label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
+                        <input type="checkbox" name="oshi_points" value="{{ pt }}">
+                        <span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
         </div>
+        
         <div class="form-group">
             <label>ネタバレレベル（詳細コメントの公開設定）:</label>
             <div class="spoiler-radio-group">
@@ -835,13 +823,20 @@ GAME_HTML = """
             </div>
         </div>
         {% if post.catchphrase %}
-        <div style="margin-bottom: 1.25rem;"><h4 class="catchphrase-text">「{{ post.catchphrase }}」</h4>
+        <div style="margin-bottom: 1rem;"><h4 class="catchphrase-text">「{{ post.catchphrase }}」</h4>
             <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.85rem;">
                 {% if post.target_audience %}<span class="meta-tag">🎯 {{ post.target_audience }}におすすめ</span>{% endif %}
                 {% if post.play_time %}<span class="meta-tag">⏱ {{ post.play_time }}</span>{% endif %}
             </div>
         </div>
         {% endif %}
+        
+        {% if post.oshi_points %}
+        <div style="margin-bottom: 1.25rem;">
+            {% for pt in post.oshi_points.split(',') %}{% if pt %}<span class="tag oshi-point">{{ pt }}</span>{% endif %}{% endfor %}
+        </div>
+        {% endif %}
+
         {% if post.spoiler_level == 0 %}<div><span class="spoiler-badge safe">🔐 ネタバレなしの詳細</span><div class="post-content"><p>{{ post.content }}</p></div></div>
         {% elif post.spoiler_level == 1 %}<div><button type="button" class="spoiler-toggle-btn warning" onclick="toggleSpoiler(this)">🔒 軽微なネタバレの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>
         {% elif post.spoiler_level == 2 %}<div><button type="button" class="spoiler-toggle-btn danger" onclick="toggleSpoiler(this)">⚠ ネタバレありの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>{% endif %}
@@ -850,7 +845,7 @@ GAME_HTML = """
             <div style="display: flex; gap: 0.5rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default("")|tojson }}, {{ post.target_audience|default("")|tojson }}, {{ post.play_time|default("")|tojson }}, {{ post.username|default("名無しの布教者")|tojson }}, {{ game.genre|default("")|tojson }}, {{ game.platform|default("")|tojson }}, {{ post.spoiler_level|default(0) }}, {{ post.content|default("")|tojson }}, {{ game.image_url|default("")|tojson }})'>🎴 布教カード</button>
+                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default("")|tojson }}, {{ post.target_audience|default("")|tojson }}, {{ post.play_time|default("")|tojson }}, {{ post.username|default("名無しの布教者")|tojson }}, {{ game.genre|default("")|tojson }}, {{ game.platform|default("")|tojson }}, {{ post.spoiler_level|default(0) }}, {{ post.content|default("")|tojson }}, {{ game.image_url|default("")|tojson }}, {{ post.oshi_points|default("")|tojson }})'>🎴 布教カード</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
@@ -890,6 +885,13 @@ MYPAGE_HTML = """
                 </div>
             </div>
             {% if post.catchphrase %}<div class="catchphrase-text" style="font-size: 1.1rem; margin-bottom: 0.5rem;">「{{ post.catchphrase }}」</div>{% endif %}
+            
+            {% if post.oshi_points %}
+            <div style="margin-bottom: 0.75rem;">
+                {% for pt in post.oshi_points.split(',') %}{% if pt %}<span class="tag oshi-point">{{ pt }}</span>{% endif %}{% endfor %}
+            </div>
+            {% endif %}
+            
             <div style="color: var(--text-sub); font-size: 0.9rem; margin-bottom: 1rem;">👍 いいね: {{ post.likes | default(0) }}</div>
             <div style="display: flex; gap: 0.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
@@ -940,11 +942,24 @@ NEW_GAME_HTML = """
         <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
         <div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
             <div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" required placeholder="例：最後まで遊んだときに、やってよかったと思える作品" style="border-color: rgba(245, 158, 11, 0.5);"></div>
-            <div style="display: flex; gap: 1rem; margin-bottom: 0; flex-wrap: wrap;">
+            <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
                 <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" placeholder="例：ストーリー重視の人"></div>
                 <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" placeholder="例：10～15時間"></div>
             </div>
+            
+            <div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label>
+                <div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">
+                    {% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}
+                    {% for pt in points %}
+                    <label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
+                        <input type="checkbox" name="oshi_points" value="{{ pt }}">
+                        <span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
         </div>
+        
         <div class="form-group">
             <label>ネタバレレベル（詳細コメントの公開設定）:</label>
             <div class="spoiler-radio-group">
@@ -960,7 +975,7 @@ NEW_GAME_HTML = """
 </div>
 """
 EDIT_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲーム情報を編集する</h2><form action="/games/{{ game.id }}/edit" method="post"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ game.title }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if game.genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ game.platform | default('') }}"></div><div class="form-group"><label>ゲーム画像（新しくアップロードして変更する場合のみ選択）:</label><input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;"><input type="hidden" name="image_base64" id="image_base64"><input type="hidden" name="existing_image_url" value="{{ game.image_url | default('') }}"><div id="image_preview" style="margin-top: 1rem; display: {% if game.image_url %}block{% else %}none{% endif %};"><img id="preview_img" src="{{ game.image_url | default('') }}" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game.id }}" class="btn btn-outline" style="flex: 1; text-align:center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
-EDIT_POST_HTML = """<div class="card" style="border-color: var(--accent);"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: var(--accent);">自分の布教を編集する</h2><form action="/games/{{ game_id }}/posts/{{ post.id }}/edit" method="post"><div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="{{ post.username }}" required></div><div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;"><div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" value="{{ post.catchphrase | default('') }}" required style="border-color: rgba(245, 158, 11, 0.5);"></div><div style="display: flex; gap: 1rem; margin-bottom: 0; flex-wrap: wrap;"><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" value="{{ post.target_audience | default('') }}"></div><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" value="{{ post.play_time | default('') }}"></div></div></div><div class="form-group"><label>ネタバレレベル:</label><div class="spoiler-radio-group"><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" {% if post.spoiler_level == 0 %}checked{% endif %}> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1" {% if post.spoiler_level == 1 %}checked{% endif %}> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2" {% if post.spoiler_level == 2 %}checked{% endif %}> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div></label></div></div><div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required>{{ post.content }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game_id }}" class="btn btn-outline" style="flex: 1; text-align: center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
+EDIT_POST_HTML = """<div class="card" style="border-color: var(--accent);"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: var(--accent);">自分の布教を編集する</h2><form action="/games/{{ game_id }}/posts/{{ post.id }}/edit" method="post"><div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="{{ post.username }}" required></div><div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;"><div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" value="{{ post.catchphrase | default('') }}" required style="border-color: rgba(245, 158, 11, 0.5);"></div><div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;"><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" value="{{ post.target_audience | default('') }}"></div><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" value="{{ post.play_time | default('') }}"></div></div><div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">{% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}{% for pt in points %}<label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);"><input type="checkbox" name="oshi_points" value="{{ pt }}" {% if post and pt in post.oshi_points|default('') %}checked{% endif %}><span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span></label>{% endfor %}</div></div></div><div class="form-group"><label>ネタバレレベル:</label><div class="spoiler-radio-group"><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" {% if post.spoiler_level == 0 %}checked{% endif %}> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1" {% if post.spoiler_level == 1 %}checked{% endif %}> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2" {% if post.spoiler_level == 2 %}checked{% endif %}> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div></label></div></div><div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required>{{ post.content }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game_id }}" class="btn btn-outline" style="flex: 1; text-align: center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
 
 def render_page(content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, **kwargs):
     content_html = Template(content_template_str).render(**kwargs)
@@ -1026,24 +1041,23 @@ async def new_game_form(): return render_page(NEW_GAME_HTML, page_title="ゲー�
 async def create_game(
     request: Request,
     title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""),
-    username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...)
+    username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...),
+    oshi_points: List[str] = Form(default=[])
 ):
     image_url = upload_image_to_supabase(image_base64)
+    points_str = ",".join(oshi_points)
+    
     with get_db_connection() as conn:
         if conn.execute('SELECT id FROM games WHERE LOWER(title) = LOWER(%s)', (title,)).fetchone():
             return render_page(NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, page_title="ゲームを追加する - Oshi-Ge")
         
-        # ゲーム情報の保存
         cursor_game = conn.execute('INSERT INTO games (title, description, genre, platform, image_url) VALUES (%s, %s, %s, %s, %s) RETURNING id', (title, description, genre, platform, image_url))
         game_id = cursor_game.fetchone()["id"]
         
-        # 最初の布教コメントの保存
-        cursor_post = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level))
+        cursor_post = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str))
         post_id = cursor_post.fetchone()["id"]
-        
         conn.commit()
     
-    # 布教情報をクッキーに保存してマイページへ反映
     res = RedirectResponse(url=f"/games/{game_id}", status_code=303)
     c = request.cookies.get("my_posts", "")
     res.set_cookie(key="my_posts", value=f"{c},{post_id}" if c else str(post_id), max_age=60*60*24*365)
@@ -1085,9 +1099,10 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     return render_page(GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img)
 
 @app.post("/games/{game_id}/posts")
-async def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...)):
+async def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
+    points_str = ",".join(oshi_points)
     with get_db_connection() as conn:
-        cursor = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level) VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level))
+        cursor = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str))
         post_id = cursor.fetchone()["id"]
         conn.commit()
         
@@ -1105,10 +1120,11 @@ async def edit_post_form(request: Request, game_id: int, post_id: int):
     return render_page(EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/posts/{post_id}/edit")
-async def update_post(request: Request, game_id: int, post_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...)):
+async def update_post(request: Request, game_id: int, post_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
     if post_id not in [int(x) for x in request.cookies.get("my_posts", "").split(",") if x.isdigit()]: raise HTTPException(status_code=403)
+    points_str = ",".join(oshi_points)
     with get_db_connection() as conn:
-        conn.execute('''UPDATE posts SET username = %s, catchphrase = %s, target_audience = %s, play_time = %s, content = %s, spoiler_level = %s WHERE id = %s AND game_id = %s''', (username, catchphrase, target_audience, play_time, content, spoiler_level, post_id, game_id))
+        conn.execute('''UPDATE posts SET username = %s, catchphrase = %s, target_audience = %s, play_time = %s, content = %s, spoiler_level = %s, oshi_points = %s WHERE id = %s AND game_id = %s''', (username, catchphrase, target_audience, play_time, content, spoiler_level, points_str, post_id, game_id))
         conn.commit()
     return RedirectResponse(url=f"/games/{game_id}", status_code=303)
 
