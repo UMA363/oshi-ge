@@ -3,6 +3,8 @@ import urllib.request
 import uvicorn
 import base64
 import uuid
+import time
+from collections import defaultdict
 from typing import List
 from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -15,6 +17,18 @@ app = FastAPI()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+# --- 簡易レートリミット（連投スパム対策） ---
+POST_COOLDOWN = 30 # 30秒間に1回の投稿に制限
+ip_last_post_time = defaultdict(float)
+
+def check_rate_limit(request: Request) -> bool:
+    client_ip = request.headers.get("X-Forwarded-For", request.client.host).split(",")[0].strip()
+    current_time = time.time()
+    if current_time - ip_last_post_time[client_ip] < POST_COOLDOWN:
+        return False
+    ip_last_post_time[client_ip] = current_time
+    return True
 
 def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row, sslmode="require")
@@ -52,7 +66,11 @@ def init_db():
                 content TEXT NOT NULL, spoiler_level INTEGER DEFAULT 0, catchphrase TEXT,
                 target_audience TEXT, play_time TEXT, likes INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             
-            # カラムの追加（推しポイント機能の追加）
+            # 通報機能用テーブル
+            conn.execute('''CREATE TABLE IF NOT EXISTS reports (
+                id SERIAL PRIMARY KEY, post_id INTEGER REFERENCES posts(id), 
+                reason TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
@@ -251,6 +269,34 @@ async function toggleBookmark(gId, btn) {
         }
     } catch(e) {}
 }
+
+function openReportModal(postId) {
+    const modal = document.getElementById('report-modal');
+    if(modal) {
+        document.getElementById('report_post_id').value = postId;
+        modal.style.display = 'flex';
+    }
+}
+function closeReportModal() {
+    const modal = document.getElementById('report-modal');
+    if(modal) modal.style.display = 'none';
+}
+async function submitReport(e) {
+    e.preventDefault();
+    const postId = document.getElementById('report_post_id').value;
+    const reasonEl = document.querySelector('input[name="report_reason"]:checked');
+    if (!reasonEl) return;
+    try {
+        const formData = new FormData();
+        formData.append('reason', reasonEl.value);
+        await fetch(`/posts/${postId}/report`, { method: 'POST', body: formData });
+        alert("通報を受信しました。サイトの治安維持にご協力いただきありがとうございます。");
+        closeReportModal();
+    } catch(err) {
+        alert("通信エラーが発生しました。");
+    }
+}
+
 function updatePlatform(f) { f.querySelector('.platform-hidden').value = Array.from(f.querySelectorAll('.platform-cb:checked')).map(cb => cb.value).join(','); }
 
 let cropper = null;
@@ -663,6 +709,27 @@ BASE_HTML = """
         </div>
     </div>
 
+    <!-- 通報用モーダル -->
+    <div id="report-modal" class="promo-modal" style="display:none; z-index: 10000;" onclick="if(event.target===this) closeReportModal();">
+        <div class="promo-modal-box" style="width: min(500px, 100%); background: var(--card-bg);">
+            <div class="promo-modal-head">
+                <h3 style="margin: 0; color: var(--danger);">⚠ この投稿を通報する</h3>
+                <button type="button" class="btn btn-outline btn-small" onclick="closeReportModal()">✕ 閉じる</button>
+            </div>
+            <p style="color: var(--text-sub); font-size: 0.9rem; margin-top: 0;">悪質な投稿（荒らし、スパム、悪質なネタバレ等）の理由を選んでください。</p>
+            <form id="reportForm" onsubmit="submitReport(event)">
+                <input type="hidden" id="report_post_id" name="post_id">
+                <div class="spoiler-radio-group" style="margin-bottom: 1.5rem;">
+                    <label class="radio-label"><div class="radio-header"><input type="radio" name="report_reason" value="ネタバレ" required> <span style="margin-left:0.5rem;">重大なネタバレが含まれる</span></div></label>
+                    <label class="radio-label"><div class="radio-header"><input type="radio" name="report_reason" value="誹謗中傷" required> <span style="margin-left:0.5rem;">誹謗中傷・攻撃的な内容</span></div></label>
+                    <label class="radio-label"><div class="radio-header"><input type="radio" name="report_reason" value="スパム" required> <span style="margin-left:0.5rem;">スパム・宣伝・荒らし</span></div></label>
+                    <label class="radio-label" style="border:none;"><div class="radio-header"><input type="radio" name="report_reason" value="その他" required> <span style="margin-left:0.5rem;">その他不適切な内容</span></div></label>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width:100%; background:var(--danger); border:none; padding:1rem; font-size:1.1rem; box-shadow:none;">通報を送信する</button>
+            </form>
+        </div>
+    </div>
+
     <script>{{ js }}</script>
 </body>
 </html>
@@ -846,6 +913,7 @@ GAME_HTML = """
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                 <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default("")|tojson }}, {{ post.target_audience|default("")|tojson }}, {{ post.play_time|default("")|tojson }}, {{ post.username|default("名無しの布教者")|tojson }}, {{ game.genre|default("")|tojson }}, {{ game.platform|default("")|tojson }}, {{ post.spoiler_level|default(0) }}, {{ post.content|default("")|tojson }}, {{ game.image_url|default("")|tojson }}, {{ post.oshi_points|default("")|tojson }})'>🎴 布教カード</button>
+                <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
         </div>
@@ -1044,6 +1112,11 @@ async def create_game(
     username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...),
     oshi_points: List[str] = Form(default=[])
 ):
+    if not check_rate_limit(request):
+        return HTMLResponse("<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>")
+    if image_base64 and len(image_base64) > 6600000: # 約5MB制限
+        return HTMLResponse("<script>alert('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。');history.back();</script>")
+
     image_url = upload_image_to_supabase(image_base64)
     points_str = ",".join(oshi_points)
     
@@ -1071,7 +1144,10 @@ async def edit_game_form(game_id: int):
     return render_page(EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/edit")
-async def update_game(game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""), existing_image_url: str = Form("")):
+async def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""), existing_image_url: str = Form("")):
+    if image_base64 and len(image_base64) > 6600000:
+        return HTMLResponse("<script>alert('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。');history.back();</script>")
+
     image_url = existing_image_url
     if image_base64:
         new_url = upload_image_to_supabase(image_base64)
@@ -1100,6 +1176,9 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
 
 @app.post("/games/{game_id}/posts")
 async def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
+    if not check_rate_limit(request):
+        return HTMLResponse("<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>")
+    
     points_str = ",".join(oshi_points)
     with get_db_connection() as conn:
         cursor = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str))
@@ -1127,6 +1206,13 @@ async def update_post(request: Request, game_id: int, post_id: int, username: st
         conn.execute('''UPDATE posts SET username = %s, catchphrase = %s, target_audience = %s, play_time = %s, content = %s, spoiler_level = %s, oshi_points = %s WHERE id = %s AND game_id = %s''', (username, catchphrase, target_audience, play_time, content, spoiler_level, points_str, post_id, game_id))
         conn.commit()
     return RedirectResponse(url=f"/games/{game_id}", status_code=303)
+
+@app.post("/posts/{post_id}/report")
+async def report_post(post_id: int, reason: str = Form(...)):
+    with get_db_connection() as conn:
+        conn.execute('INSERT INTO reports (post_id, reason) VALUES (%s, %s)', (post_id, reason))
+        conn.commit()
+    return JSONResponse({"status": "ok"})
 
 @app.post("/games/{game_id}/posts/{post_id}/like")
 async def like_post(game_id: int, post_id: int):
