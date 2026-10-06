@@ -710,9 +710,10 @@ GAME_HTML = """
         <p style="margin: 0; white-space: pre-wrap; color: #cbd5e1;">{{ game.description }}</p>
     </div>
     
-    <!-- ストア検索ボタン追加 -->
+    <!-- ストア検索ボタン追加（Amazon・楽天・Steam） -->
     <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-        <a href="https://www.amazon.co.jp/s?k={{ game.title }}&i=videogames" target="_blank" class="btn btn-outline btn-small" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.5);">🛒 Amazonで探す</a>
+        <a href="https://www.amazon.co.jp/s?k={{ game.title }}&i=videogames&tag=oshige06-22" target="_blank" class="btn btn-outline btn-small" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.5);">🛒 Amazonで探す</a>
+        <a href="https://search.rakuten.co.jp/search/mall/{{ game.title }}/?tg=101240" target="_blank" class="btn btn-outline btn-small" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.5);">🛍 楽天市場で探す</a>
         <a href="https://store.steampowered.com/search/?term={{ game.title }}" target="_blank" class="btn btn-outline btn-small" style="color: #cbd5e1; border-color: rgba(203, 213, 225, 0.5);">🎮 Steamで探す</a>
     </div>
 
