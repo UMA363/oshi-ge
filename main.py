@@ -709,6 +709,13 @@ GAME_HTML = """
     <div style="background: #0f172a; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
         <p style="margin: 0; white-space: pre-wrap; color: #cbd5e1;">{{ game.description }}</p>
     </div>
+    
+    <!-- ストア検索ボタン追加 -->
+    <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
+        <a href="https://www.amazon.co.jp/s?k={{ game.title }}&i=videogames" target="_blank" class="btn btn-outline btn-small" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.5);">🛒 Amazonで探す</a>
+        <a href="https://store.steampowered.com/search/?term={{ game.title }}" target="_blank" class="btn btn-outline btn-small" style="color: #cbd5e1; border-color: rgba(203, 213, 225, 0.5);">🎮 Steamで探す</a>
+    </div>
+
     <div style="display: flex; gap: 0.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
         <button type="button" class="btn btn-x" onclick="shareGameToX('{{ game.title }}')">𝕏 でゲームを共有</button>
         <button type="button" class="btn btn-line" onclick="shareGameToLine('{{ game.title }}')">LINE でゲームを共有</button>
