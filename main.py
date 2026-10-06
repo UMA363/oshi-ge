@@ -723,9 +723,12 @@ GAME_HTML = """
     </div>
 </div>
 
-<div class="card" style="border-color: var(--accent); box-shadow: 0 0 15px rgba(245, 158, 11, 0.1);">
-    <h3 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; color: var(--accent);">🔥 このゲームを布教する</h3>
-    <form action="/games/{{ game.id }}/posts" method="post" style="margin-top: 1.5rem;">
+<!-- 布教投稿フォームを折りたたみ式（detailsタグ）に変更 -->
+<details class="card" style="border-color: var(--accent); box-shadow: 0 0 15px rgba(245, 158, 11, 0.1);">
+    <summary style="cursor: pointer; font-weight: bold; color: var(--accent); font-size: 1.1rem; user-select: none; outline: none;">
+        🔥 このゲームを布教する（クリックして投稿フォームを開く）
+    </summary>
+    <form action="/games/{{ game.id }}/posts" method="post" style="margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
         <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
         <div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
             <div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" required placeholder="例：最後まで遊んだときに、やってよかったと思える作品" style="border-color: rgba(245, 158, 11, 0.5);"></div>
@@ -745,7 +748,7 @@ GAME_HTML = """
         <div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required placeholder="熱い思いをぶつけてください。"></textarea></div>
         <button type="submit" class="btn btn-primary" style="width: 100%; font-size:1.1rem; padding: 1rem;">布教を投稿する</button>
     </form>
-</div>
+</details>
 
 <div>
     <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 1rem;">
@@ -800,7 +803,7 @@ GAME_HTML = """
             <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
         </div>
         <div id="promo-instruction" style="color:var(--text-sub); font-size:0.9rem; margin-top:0.7rem;">
-            このカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。
+            এইカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。
         </div>
     </div>
 </div>
