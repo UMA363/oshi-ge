@@ -739,7 +739,7 @@ INDEX_HTML = """
     </div>
     <div class="sidebar-column">
         <div class="card" style="border-color: var(--accent); padding: 1.2rem;">
-            <h3 style="margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">👑 今週の人気ゲーム</h3>
+            <h3 style="margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">👑 今週の注目ゲーム</h3>
             <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
                 {% for item in weekly_ranking %}
                 <div style="display: flex; gap: 1rem; align-items: center; cursor: pointer;" onclick="location.href='/games/{{ item.id }}'">
@@ -749,7 +749,7 @@ INDEX_HTML = """
                     </div>
                     <div>
                         <div style="font-weight: bold; color: var(--text-main); font-size: 0.95rem; margin-bottom: 0.2rem;">{{ item.title }}</div>
-                        <div style="font-size: 0.8rem; color: var(--accent);">🔥 今週 {{ item.weekly_posts }} 件の布教</div>
+                        <div style="font-size: 0.8rem; color: var(--accent);">👍 今週 {{ item.weekly_likes }} いいね</div>
                     </div>
                 </div>
                 {% else %}<div style="color: var(--text-sub); font-size: 0.9rem;">今週の布教はまだありません。</div>{% endfor %}
@@ -1009,7 +1009,7 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
     
     with get_db_connection() as conn:
         games = conn.execute(query + f" ORDER BY {order_clause}", params).fetchall()
-        weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COUNT(p.id) as weekly_posts FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_posts DESC, g.created_at DESC LIMIT 5''').fetchall()
+        weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
     return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking)
 
 @app.get("/games/random")
