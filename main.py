@@ -874,23 +874,44 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
     if sort == "posts": order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
     query = f'''SELECT g.*, (SELECT catchphrase FROM posts p WHERE p.game_id = g.id ORDER BY p.created_at DESC LIMIT 1) as latest_catchphrase, (SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) as post_count FROM games g WHERE 1=1'''
     params = []
+    
     if q:
-        search = '%' + q + '%'
-        query += """ AND (
-            g.title ILIKE %s
-            OR COALESCE(g.description, '') ILIKE %s
-            OR EXISTS (
-                SELECT 1 FROM posts sp
-                WHERE sp.game_id = g.id
-                AND (
-                    COALESCE(sp.catchphrase, '') ILIKE %s
-                    OR COALESCE(sp.target_audience, '') ILIKE %s
-                    OR COALESCE(sp.play_time, '') ILIKE %s
-                    OR COALESCE(sp.content, '') ILIKE %s
+        # 🧠 クイックフィルター用の類義語辞書（ここでキーワードを自動拡張）
+        synonyms = {
+            "ストーリー": ["ストーリー", "シナリオ", "物語"],
+            "泣ける": ["泣ける", "泣いた", "涙", "感動", "号泣", "切ない"],
+            "一人": ["一人", "1人", "ソロ", "シングル", "没入"],
+            "短時間": ["短時間", "サクッと", "短い", "手軽", "テンポ", "休日"],
+            "ホラー": ["ホラー", "怖い", "恐怖", "ホラゲー", "驚く"],
+            "インディー": ["インディー", "同人", "個人制作"],
+            "初心者": ["初心者", "初めて", "入門", "簡単", "やさしい", "優しい", "誰でも"]
+        }
+        
+        # 辞書に一致すれば類義語リストを展開、なければ入力文字列をそのまま使用
+        search_words = synonyms.get(q, [q])
+        
+        # 展開したキーワードでOR検索の条件を構築
+        word_conditions = []
+        for word in search_words:
+            search_pattern = '%' + word + '%'
+            params.extend([search_pattern] * 6)
+            word_conditions.append("""(
+                g.title ILIKE %s
+                OR COALESCE(g.description, '') ILIKE %s
+                OR EXISTS (
+                    SELECT 1 FROM posts sp
+                    WHERE sp.game_id = g.id
+                    AND (
+                        COALESCE(sp.catchphrase, '') ILIKE %s
+                        OR COALESCE(sp.target_audience, '') ILIKE %s
+                        OR COALESCE(sp.play_time, '') ILIKE %s
+                        OR COALESCE(sp.content, '') ILIKE %s
+                    )
                 )
-            )
-        )"""
-        params.extend([search] * 6)
+            )""")
+        
+        query += " AND (" + " OR ".join(word_conditions) + ")"
+
     if genre: query += " AND g.genre = %s"; params.append(genre)
     if platform: query += " AND g.platform ILIKE %s"; params.append('%' + platform + '%')
     
