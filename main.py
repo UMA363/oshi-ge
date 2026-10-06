@@ -4,6 +4,7 @@ import uvicorn
 import base64
 import uuid
 import time
+import io
 from collections import defaultdict
 from typing import List
 from fastapi import FastAPI, Request, Form, HTTPException, Response
@@ -12,14 +13,34 @@ from jinja2 import Template
 import psycopg
 from psycopg.rows import dict_row
 
+# 画像合成ライブラリ
+from PIL import Image, ImageDraw, ImageFont
+
 app = FastAPI()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
+# --- 日本語フォントの自動ダウンロード（動的OGP用） ---
+FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
+FONT_PATH = "NotoSansCJKjp-Bold.otf"
+
+def download_font():
+    if not os.path.exists(FONT_PATH):
+        try:
+            print("Downloading Japanese Font for OGP...")
+            req = urllib.request.Request(FONT_URL, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response:
+                with open(FONT_PATH, 'wb') as f:
+                    f.write(response.read())
+        except Exception as e:
+            print("Font download error:", e)
+
+download_font()
+
 # --- 簡易レートリミット（連投スパム対策） ---
-POST_COOLDOWN = 30 # 30秒間に1回の投稿に制限
+POST_COOLDOWN = 30
 ip_last_post_time = defaultdict(float)
 
 def check_rate_limit(request: Request) -> bool:
@@ -66,7 +87,6 @@ def init_db():
                 content TEXT NOT NULL, spoiler_level INTEGER DEFAULT 0, catchphrase TEXT,
                 target_audience TEXT, play_time TEXT, likes INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             
-            # 通報機能用テーブル
             conn.execute('''CREATE TABLE IF NOT EXISTS reports (
                 id SERIAL PRIMARY KEY, post_id INTEGER REFERENCES posts(id), 
                 reason TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
@@ -95,6 +115,92 @@ async def proxy_image(url: str):
             return Response(content=data, media_type=content_type)
     except Exception:
         raise HTTPException(status_code=404)
+
+# --- 1.8 動的OGP生成エンドポイント ---
+@app.get("/games/{game_id}/ogp.png")
+async def generate_ogp(game_id: int):
+    with get_db_connection() as conn:
+        game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
+        if not game:
+            raise HTTPException(status_code=404)
+        post = conn.execute('SELECT catchphrase, username FROM posts WHERE game_id = %s ORDER BY likes DESC, created_at DESC LIMIT 1', (game_id,)).fetchone()
+
+    W, H = 1200, 630
+    img = Image.new('RGB', (W, H), color='#0f172a')
+    
+    # 背景画像（ゲーム画像）を暗くして敷く
+    if game.get("image_url"):
+        try:
+            req = urllib.request.Request(game["image_url"], headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as response:
+                bg_data = response.read()
+                bg_img = Image.open(io.BytesIO(bg_data)).convert("RGBA")
+                bg_ratio = bg_img.width / bg_img.height
+                target_ratio = W / H
+                if bg_ratio > target_ratio:
+                    new_w = int(bg_img.height * target_ratio)
+                    offset = (bg_img.width - new_w) // 2
+                    bg_img = bg_img.crop((offset, 0, offset + new_w, bg_img.height))
+                else:
+                    new_h = int(bg_img.width / target_ratio)
+                    offset = (bg_img.height - new_h) // 2
+                    bg_img = bg_img.crop((0, offset, bg_img.width, offset + new_h))
+                bg_img = bg_img.resize((W, H))
+                overlay = Image.new('RGBA', (W, H), color=(15, 23, 42, 200)) # 暗いオーバーレイ
+                bg_img = Image.alpha_composite(bg_img, overlay)
+                img.paste(bg_img.convert('RGB'), (0, 0))
+        except Exception as e:
+            print("OGP Bg Error:", e)
+
+    draw = ImageDraw.Draw(img)
+    
+    try:
+        font_title = ImageFont.truetype(FONT_PATH, 56)
+        font_catch = ImageFont.truetype(FONT_PATH, 46)
+        font_brand = ImageFont.truetype(FONT_PATH, 32)
+    except:
+        font_title = ImageFont.load_default()
+        font_catch = ImageFont.load_default()
+        font_brand = ImageFont.load_default()
+
+    # Oshi-Ge ロゴと装飾
+    draw.rectangle([(0, 0), (16, H)], fill="#f59e0b")
+    draw.text((60, 40), "🎮 Oshi-Ge", font=font_brand, fill="#f59e0b")
+    
+    # ゲームタイトル
+    title_text = game['title']
+    draw.text((60, 130), title_text, font=font_title, fill="#ffffff")
+    draw.line([(60, 210), (1140, 210)], fill="#334155", width=2)
+    
+    # キャッチコピー
+    if post and post['catchphrase']:
+        catch_text = f"「{post['catchphrase']}」"
+        
+        # 長いキャッチコピーの改行処理
+        chars = list(catch_text)
+        line = ""
+        lines = []
+        for ch in chars:
+            if draw.textlength(line + ch, font=font_catch) > 1050:
+                lines.append(line)
+                line = ch
+            else:
+                line += ch
+        if line: lines.append(line)
+        
+        y_text = 270
+        for l in lines[:3]: # 最大3行まで
+            draw.text((60, y_text), l, font=font_catch, fill="#fcd34d")
+            y_text += 65
+            
+        author_text = f"布教者: {post['username']}"
+        draw.text((60, H - 80), author_text, font=font_brand, fill="#94a3b8")
+    else:
+        draw.text((60, 270), "まだ布教コメントがありません。\n最初の布教者になりませんか？", font=font_catch, fill="#94a3b8")
+
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG')
+    return Response(content=img_byte_arr.getvalue(), media_type="image/png")
 
 # --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
@@ -167,9 +273,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
-
 .quick-filter.active { background-color: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 6px rgba(245,158,11,0.2); }
-
 @media (max-width: 600px) {
     html { font-size: 16px; }
     .header-container { flex-direction: column; gap: 1rem; text-align: center; padding: 1rem; }
@@ -184,7 +288,6 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
     .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
 }
-
 .discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
 .discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
 .quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
@@ -1114,7 +1217,7 @@ async def create_game(
 ):
     if not check_rate_limit(request):
         return HTMLResponse("<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>")
-    if image_base64 and len(image_base64) > 6600000: # 約5MB制限
+    if image_base64 and len(image_base64) > 6600000:
         return HTMLResponse("<script>alert('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。');history.back();</script>")
 
     image_url = upload_image_to_supabase(image_base64)
@@ -1170,7 +1273,12 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     
     game_title_tag = f"{game['title']} の評価・感想・ネタバレなし布教 - Oshi-Ge"
     og_desc = game['description'] if game['description'] else f"『{game['title']}』のおすすめ布教ページです。ネタバレなしで魅力をお伝えします。"
-    og_img = game['image_url'] if game['image_url'] else None
+    
+    # 動的OGPのURLを設定
+    host = request.headers.get("host", "")
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    base_url = f"{scheme}://{host}" if host else ""
+    og_img = f"{base_url}/games/{game_id}/ogp.png"
     
     return render_page(GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img)
 
