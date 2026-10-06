@@ -177,6 +177,9 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .promo-canvas-wrap { background: #0b1120; border-radius: 10px; padding: 0.75rem; border: 1px solid var(--border); }
 #promoCanvas { display: block; width: 100%; height: auto; border-radius: 8px; }
 .promo-modal-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
+
+/* Cropper用のスタイル微調整 */
+.cropper-view-box, .cropper-face { border-radius: 4px; }
 """
 
 JS = """
@@ -250,6 +253,24 @@ async function toggleBookmark(gId, btn) {
 }
 function updatePlatform(f) { f.querySelector('.platform-hidden').value = Array.from(f.querySelectorAll('.platform-cb:checked')).map(cb => cb.value).join(','); }
 
+let cropper = null;
+
+function applyCrop() {
+    if (!cropper) return;
+    const canvas = cropper.getCroppedCanvas({ maxWidth: 800, maxHeight: 800 });
+    const dataUrl = canvas.toDataURL('image/webp', 0.8);
+    document.getElementById('image_base64').value = dataUrl;
+    document.getElementById('preview_img').src = dataUrl;
+    document.getElementById('image_preview').style.display = 'block';
+    closeCropModal();
+}
+
+function closeCropModal() {
+    document.getElementById('crop_modal').style.display = 'none';
+    if (cropper) { cropper.destroy(); cropper = null; }
+    document.getElementById('image_upload').value = ""; 
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll('.btn-like').forEach(b => { if (localStorage.getItem(`liked_${b.getAttribute('data-post-id')}`)) b.classList.add('liked'); });
     document.querySelectorAll('.platform-hidden').forEach(h => {
@@ -258,7 +279,6 @@ document.addEventListener("DOMContentLoaded", () => {
         h.closest('form').querySelectorAll('.platform-cb').forEach(cb => { if (p.includes(cb.value)) cb.checked = true; });
     });
 
-    // 画像の自動リサイズとBase64変換
     const imageUpload = document.getElementById('image_upload');
     if (imageUpload) {
         imageUpload.addEventListener('change', function(e) {
@@ -266,27 +286,18 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!file) return;
             const reader = new FileReader();
             reader.onload = function(event) {
-                const img = new Image();
-                img.onload = function() {
-                    const canvas = document.createElement('canvas');
-                    let width = img.width;
-                    let height = img.height;
-                    const MAX_WIDTH = 800; // 最適なサイズに自動縮小
-                    if (width > MAX_WIDTH) {
-                        height = Math.round((height * MAX_WIDTH) / width);
-                        width = MAX_WIDTH;
-                    }
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, width, height);
-                    const dataUrl = canvas.toDataURL('image/webp', 0.8); // 80%の画質でWebPに圧縮
-                    document.getElementById('image_base64').value = dataUrl;
-                    document.getElementById('preview_img').src = dataUrl;
-                    document.getElementById('image_preview').style.display = 'block';
-                }
-                img.src = event.target.result;
-            }
+                const cropperImg = document.getElementById('cropper_img');
+                cropperImg.src = event.target.result;
+                document.getElementById('crop_modal').style.display = 'flex';
+                if (cropper) cropper.destroy();
+                cropper = new Cropper(cropperImg, {
+                    aspectRatio: 16 / 9,
+                    viewMode: 1,
+                    autoCropArea: 1,
+                    responsive: true,
+                    background: false
+                });
+            };
             reader.readAsDataURL(file);
         });
     }
@@ -623,6 +634,10 @@ BASE_HTML = """
     
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6608111802250449" crossorigin="anonymous"></script>
     
+    <!-- Cropper.js (画像切り抜きライブラリ) -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
+
     <style>{{ css }}</style>
 </head>
 <body>
@@ -657,6 +672,22 @@ BASE_HTML = """
     </div>
     {% endif %}
     <main>{{ content }}</main>
+
+    <!-- 画像切り抜き用モーダル -->
+    <div id="crop_modal" class="promo-modal" style="display:none; z-index: 10000;">
+        <div class="promo-modal-box" style="width: min(600px, 100%); background: var(--bg-color);">
+            <div class="promo-modal-head">
+                <h3 style="margin: 0; color: var(--accent);">✂️ 画像の切り抜き</h3>
+                <button type="button" class="btn btn-outline btn-small" onclick="closeCropModal()">✕ キャンセル</button>
+            </div>
+            <p style="color: var(--text-sub); font-size: 0.9rem; margin-top: 0;">枠を動かして、見せたい範囲を指定してください。</p>
+            <div style="max-height: 50vh; overflow: hidden; margin-bottom: 1.5rem; background: #000; border-radius: 8px;">
+                <img id="cropper_img" src="" style="max-width: 100%; display: block;">
+            </div>
+            <button type="button" class="btn btn-primary" style="width: 100%; padding: 1rem; font-size: 1.1rem;" onclick="applyCrop()">✅ この範囲で切り抜く</button>
+        </div>
+    </div>
+
     <script>{{ js }}</script>
 </body>
 </html>
@@ -825,23 +856,6 @@ GAME_HTML = """
         </div>
     </div>
     {% else %}<div class="card" style="text-align: center; color: var(--text-sub); padding: 3rem 0; background: transparent; border: 1px dashed var(--border);"><p style="margin: 0;">まだ布教コメントがありません。<br>最初の布教者になりませんか？</p></div>{% endfor %}
-</div>
-
-<div id="promo-card-modal" class="promo-modal" style="display:none;" onclick="if(event.target===this) closePromoCard();">
-    <div class="promo-modal-box">
-        <div class="promo-modal-head">
-            <h3>🎴 布教カード</h3>
-            <button type="button" class="btn btn-outline btn-small" onclick="closePromoCard()">✕ 閉じる</button>
-        </div>
-        <div class="promo-canvas-wrap"><canvas id="promoCanvas" width="1200" height="960"></canvas></div>
-        <div class="promo-modal-actions">
-            <button type="button" id="promo-dl-btn" class="btn btn-primary" onclick="downloadPromoCard()">⬇️ 画像を保存</button>
-            <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
-        </div>
-        <div id="promo-instruction" style="color:var(--text-sub); font-size:0.9rem; margin-top:0.7rem;">
-            このカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。
-        </div>
-    </div>
 </div>
 """
 
