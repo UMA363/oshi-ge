@@ -612,6 +612,7 @@ BASE_HTML = """
     <meta name="twitter:card" content="summary">
     {% endif %}
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
+    
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-XRFBSR9HSR"></script>
     <script>
       window.dataLayer = window.dataLayer || [];
@@ -619,6 +620,9 @@ BASE_HTML = """
       gtag('js', new Date());
       gtag('config', 'G-XRFBSR9HSR');
     </script>
+    
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6608111802250449" crossorigin="anonymous"></script>
+    
     <style>{{ css }}</style>
 </head>
 <body>
