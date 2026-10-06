@@ -55,12 +55,14 @@ async def proxy_image(url: str):
 # --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
 :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
+/* 全体のサイズをPC表示時に少し小さく調整 (85%スケール相当) */
+html { font-size: 14px; }
 body { font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 0; line-height: 1.6; }
 .header-container { background-color: #0b1120; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
 .header-container h1 { margin: 0; font-size: 1.8rem; font-weight: 900; letter-spacing: 0.05em; font-family: 'Arial Black', sans-serif;}
 .header-container h1 a { color: var(--accent); text-decoration: none; transition: color 0.2s; }
 .header-container h1 a:hover { color: var(--text-main); }
-main { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
+main { max-width: 1000px; margin: 0 auto; padding: 2rem 1rem; }
 .hero { text-align: center; padding: 3rem 1rem 4rem; background: radial-gradient(circle at top, #1e293b 0%, #0f172a 100%); border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
 .hero h2 { font-size: 2.5rem; margin: 0 0 1rem 0; color: var(--accent); font-weight: 900; }
 .hero p { color: var(--text-sub); font-size: 1.1rem; margin-bottom: 2rem; }
@@ -73,7 +75,7 @@ main { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
 .search-inputs input:focus, .search-inputs select:focus { outline: none; border-color: var(--accent); }
 .layout-wrapper { display: flex; gap: 2rem; align-items: flex-start; }
 .main-column { flex: 1; min-width: 0; }
-.sidebar-column { width: 320px; flex-shrink: 0; }
+.sidebar-column { width: 300px; flex-shrink: 0; }
 @media (max-width: 850px) { 
     .layout-wrapper { flex-direction: column; } 
     .sidebar-column { width: 100%; order: -1; margin-bottom: 1.5rem; } 
@@ -102,10 +104,10 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .radio-header { display: flex; align-items: center; font-weight: bold; font-size: 1.05rem; }
 .tag { display: inline-block; background: #334155; color: #e2e8f0; padding: 0.3rem 0.8rem; border-radius: 9999px; font-size: 0.85rem; font-weight: bold; margin-bottom: 0.5rem; margin-right: 0.5rem; }
 .tag.genre { background: rgba(245, 158, 11, 0.2); color: var(--accent); border: 1px solid rgba(245, 158, 11, 0.3); }
-.game-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 1.5rem; }
+.game-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.5rem; }
 .game-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; transition: transform 0.2s; display: flex; flex-direction: column; cursor: pointer; }
 .game-card:hover { transform: translateY(-4px); border-color: var(--accent); }
-.game-thumbnail { width: 100%; height: 160px; object-fit: cover; background: #334155; }
+.game-thumbnail { width: 100%; height: 150px; object-fit: cover; background: #334155; }
 .game-thumbnail.empty { display: flex; align-items: center; justify-content: center; color: var(--text-sub); font-weight: bold; background: linear-gradient(45deg, #1e293b, #0f172a); }
 .game-card-body { padding: 1.2rem; flex-grow: 1; display: flex; flex-direction: column; }
 .latest-catchphrase { margin-top: auto; padding: 0.8rem; background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent); border-radius: 4px; font-size: 0.9rem; font-weight: bold; color: #fcd34d; }
@@ -125,6 +127,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 
 /* スマホ用レイアウト調整CSS */
 @media (max-width: 600px) {
+    html { font-size: 16px; } /* スマホでは元のサイズに戻す */
     .header-container { flex-direction: column; gap: 1rem; text-align: center; padding: 1rem; }
     .header-container h1 { font-size: 1.5rem; }
     .hero { padding: 2rem 1rem; }
@@ -559,6 +562,8 @@ BASE_HTML = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title | default("Oshi-Ge | ネタバレなしゲーム布教サイト") }}</title>
+    <!-- 絵文字ファビコンの設定 -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
     <!-- Google tag (gtag.js) -->
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-XRFBSR9HSR"></script>
     <script>
@@ -807,7 +812,7 @@ MYPAGE_HTML = """
                 <span class="post-author">{{ post.username }}</span>
                 <div style="display: flex; gap: 1rem; align-items: center;">
                     <span>{{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}</span>
-                    <a href="/games/{{ post.game_id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem;">⚙️️ 編集</a>
+                    <a href="/games/{{ post.game_id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem;">⚙ 編集</a>
                 </div>
             </div>
             {% if post.catchphrase %}<div class="catchphrase-text" style="font-size: 1.1rem; margin-bottom: 0.5rem;">「{{ post.catchphrase }}」</div>{% endif %}
