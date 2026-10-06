@@ -1,6 +1,8 @@
 import os
 import urllib.request
 import uvicorn
+import base64
+import uuid
 from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Template
@@ -9,13 +11,36 @@ from psycopg.rows import dict_row
 
 app = FastAPI()
 
-# Renderの環境変数からSupabaseのURLを取得
 DATABASE_URL = os.environ.get("DATABASE_URL")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row, sslmode="require")
 
-# --- 1. データベース初期化 (PostgreSQL用) ---
+def upload_image_to_supabase(base64_data: str) -> str:
+    """Base64画像を受け取り、Supabase Storageにアップロードして公開URLを返す"""
+    if not base64_data or not SUPABASE_URL or not SUPABASE_KEY: return ""
+    try:
+        header, encoded = base64_data.split(",", 1)
+        file_ext = "webp" if "webp" in header else "jpg"
+        file_data = base64.b64decode(encoded)
+        filename = f"{uuid.uuid4()}.{file_ext}"
+        
+        url = f"{SUPABASE_URL}/storage/v1/object/games/{filename}"
+        req = urllib.request.Request(url, data=file_data, method="POST")
+        req.add_header("Authorization", f"Bearer {SUPABASE_KEY}")
+        req.add_header("apikey", SUPABASE_KEY)
+        req.add_header("Content-Type", f"image/{file_ext}")
+        
+        with urllib.request.urlopen(req) as response:
+            pass
+        return f"{SUPABASE_URL}/storage/v1/object/public/games/{filename}"
+    except Exception as e:
+        print("Image upload error:", e)
+        return ""
+
+# --- 1. データベース初期化 ---
 def init_db():
     try:
         with get_db_connection() as conn:
@@ -27,7 +52,6 @@ def init_db():
                 content TEXT NOT NULL, spoiler_level INTEGER DEFAULT 0, catchphrase TEXT,
                 target_audience TEXT, play_time TEXT, likes INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             
-            # 不足しているカラムがあれば自動追加（安全装置）
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
@@ -40,7 +64,7 @@ def init_db():
 
 init_db()
 
-# --- 1.5 画像中継プロキシ（CORSエラー回避用） ---
+# --- 1.5 画像中継プロキシ ---
 @app.get("/proxy-image")
 async def proxy_image(url: str):
     try:
@@ -55,7 +79,6 @@ async def proxy_image(url: str):
 # --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
 :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
-/* 全体のサイズをPC表示時に少し小さく調整 (85%スケール相当) */
 html { font-size: 14px; }
 body { font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 0; line-height: 1.6; }
 .header-container { background-color: #0b1120; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
@@ -89,14 +112,13 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 .btn-small { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
 .btn-x { background-color: #000; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #333; }
-.btn-x:hover { background-color: #222; }
 .btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #05a546;}
-.btn-line:hover { background-color: #05a546; }
 .btn-bookmark { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9rem; transition: 0.2s; white-space: nowrap; }
 .btn-bookmark.bookmarked { background: rgba(16, 185, 129, 0.1); border-color: var(--safe); color: var(--safe); }
 .form-group { margin-bottom: 1.5rem; }
 .form-group label { display: block; margin-bottom: 0.5rem; font-weight: bold; color: #cbd5e1; }
 .form-group input[type="text"], .form-group textarea, .form-group select { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; box-sizing: border-box; font-size: 1rem; font-family: inherit; }
+.form-group input[type="file"] { width: 100%; color: var(--text-main); padding: 0.5rem 0; }
 .form-group input[type="checkbox"] { width: auto; transform: scale(1.2); cursor: pointer; margin-right: 0.5rem; }
 .spoiler-radio-group { background: #0b1120; padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border); }
 .radio-label { display: flex; flex-direction: column; margin-bottom: 1rem; cursor: pointer; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
@@ -125,7 +147,9 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
 
-/* スマホ用レイアウト調整CSS */
+/* 検索ボタンのハイライト実装 */
+.quick-filter.active { background-color: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 6px rgba(245,158,11,0.2); }
+
 @media (max-width: 600px) {
     html { font-size: 16px; }
     .header-container { flex-direction: column; gap: 1rem; text-align: center; padding: 1rem; }
@@ -136,13 +160,11 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .search-inputs input, .search-inputs select, .search-inputs button { width: 100%; box-sizing: border-box; }
     .game-grid { grid-template-columns: 1fr; }
     .card { padding: 1rem; }
-    
     .game-header-row { flex-direction: column; align-items: stretch !important; gap: 0.75rem !important; }
     .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
     .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
 }
 
-/* 探し方・布教カード追加 */
 .discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
 .discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
 .quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
@@ -197,7 +219,6 @@ function sharePost(btn, platform) {
     } else if (spoilerLevel === 2) {
         text += `\\n\\n⚠️ ネタバレあり`;
     }
-
     text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n#OshiGe`;
 
     if (platform === 'x') {
@@ -228,6 +249,7 @@ async function toggleBookmark(gId, btn) {
     } catch(e) {}
 }
 function updatePlatform(f) { f.querySelector('.platform-hidden').value = Array.from(f.querySelectorAll('.platform-cb:checked')).map(cb => cb.value).join(','); }
+
 document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll('.btn-like').forEach(b => { if (localStorage.getItem(`liked_${b.getAttribute('data-post-id')}`)) b.classList.add('liked'); });
     document.querySelectorAll('.platform-hidden').forEach(h => {
@@ -235,9 +257,41 @@ document.addEventListener("DOMContentLoaded", () => {
         const p = h.value.split(',').map(s => s.trim());
         h.closest('form').querySelectorAll('.platform-cb').forEach(cb => { if (p.includes(cb.value)) cb.checked = true; });
     });
+
+    // 画像の自動リサイズとBase64変換
+    const imageUpload = document.getElementById('image_upload');
+    if (imageUpload) {
+        imageUpload.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+                    const MAX_WIDTH = 800; // 最適なサイズに自動縮小
+                    if (width > MAX_WIDTH) {
+                        height = Math.round((height * MAX_WIDTH) / width);
+                        width = MAX_WIDTH;
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    const dataUrl = canvas.toDataURL('image/webp', 0.8); // 80%の画質でWebPに圧縮
+                    document.getElementById('image_base64').value = dataUrl;
+                    document.getElementById('preview_img').src = dataUrl;
+                    document.getElementById('image_preview').style.display = 'block';
+                }
+                img.src = event.target.result;
+            }
+            reader.readAsDataURL(file);
+        });
+    }
 });
 
-// --- デバイス判定と布教カード生成 ---
 function isMobileDevice() {
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 }
@@ -266,7 +320,6 @@ function openPromoCard(title, catchphrase, targetAudience, playTime, username, g
         if(dlBtn) dlBtn.style.display = 'inline-block';
         if(instruction) instruction.innerHTML = 'このカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。';
     }
-
     drawPromoCard();
 }
 
@@ -494,26 +547,20 @@ async function drawPromoCard() {
     }
 
     if (spoiler > 0) {
-        const spoilerText = spoiler === 2
-            ? 'WARNING  ネタバレあり'
-            : 'CAUTION  軽微なネタバレあり';
-
+        const spoilerText = spoiler === 2 ? 'WARNING  ネタバレあり' : 'CAUTION  軽微なネタバレあり';
         ctx.font = '900 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
         const sw = ctx.measureText(spoilerText).width + 36;
-
         drawRoundRect(ctx, 58, Math.min(y, H - 150), sw, 44, 22);
         ctx.fillStyle = spoiler === 2 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)';
         ctx.fill();
         ctx.strokeStyle = spoiler === 2 ? 'rgba(239,68,68,0.65)' : 'rgba(245,158,11,0.65)';
         ctx.stroke();
-
         ctx.fillStyle = spoiler === 2 ? '#fca5a5' : '#fde68a';
         ctx.fillText(spoilerText, 76, Math.min(y, H - 150) + 29);
         y += 72;
     }
 
     const footerY = Math.max(y + 20, H - 90);
-
     ctx.strokeStyle = '#334155';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -547,7 +594,6 @@ document.addEventListener('keydown', (e) => {
 });
 """
 
-# --- SEO対応：OGPタグを含むBASE_HTML ---
 BASE_HTML = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -556,7 +602,6 @@ BASE_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title | default("Oshi-Ge | ネタバレなしゲーム布教サイト") }}</title>
     <meta name="description" content="{{ og_description | default('未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。') }}">
-    
     <meta property="og:type" content="website">
     <meta property="og:title" content="{{ page_title | default('Oshi-Ge | ネタバレなしゲーム布教サイト') }}">
     <meta property="og:description" content="{{ og_description | default('未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。') }}">
@@ -566,7 +611,6 @@ BASE_HTML = """
     {% else %}
     <meta name="twitter:card" content="summary">
     {% endif %}
-    
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-XRFBSR9HSR"></script>
     <script>
@@ -619,13 +663,13 @@ INDEX_HTML = """
     <h3>🔎 目的からゲームを探す</h3>
     <div style="color: var(--text-sub); margin-bottom: 0.9rem;">タイトルを知らなくても大丈夫。気分や好みから探せます。</div>
     <div class="quick-filter-grid">
-        <a class="quick-filter" href="/?q=ストーリー">📖 ストーリー重視</a>
-        <a class="quick-filter" href="/?q=泣ける">😭 泣ける</a>
-        <a class="quick-filter" href="/?q=一人">👤 一人で遊びたい</a>
-        <a class="quick-filter" href="/?q=短時間">⏱ 短時間</a>
-        <a class="quick-filter" href="/?q=ホラー">😱 ホラー</a>
-        <a class="quick-filter" href="/?q=インディー">💎 インディー</a>
-        <a class="quick-filter" href="/?q=初心者">🌱 初心者向け</a>
+        <a class="quick-filter {% if q == 'ストーリー' %}active{% endif %}" href="/?q=ストーリー">📖 ストーリー重視</a>
+        <a class="quick-filter {% if q == '泣ける' %}active{% endif %}" href="/?q=泣ける">😭 泣ける</a>
+        <a class="quick-filter {% if q == '一人' %}active{% endif %}" href="/?q=一人">👤 一人で遊びたい</a>
+        <a class="quick-filter {% if q == '短時間' %}active{% endif %}" href="/?q=短時間">⏱ 短時間</a>
+        <a class="quick-filter {% if q == 'ホラー' %}active{% endif %}" href="/?q=ホラー">😱 ホラー</a>
+        <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
+        <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
         <a class="quick-filter" href="/games/random">🎲 完全ランダム</a>
     </div>
 </div>
@@ -712,7 +756,6 @@ GAME_HTML = """
     </div>
 </div>
 
-<!-- 布教投稿フォーム（任意項目に「任意」ラベルを明記してハードルを軽減） -->
 <details class="card" style="border-color: var(--accent); box-shadow: 0 0 15px rgba(245, 158, 11, 0.1);">
     <summary style="cursor: pointer; font-weight: bold; color: var(--accent); font-size: 1.1rem; user-select: none; outline: none;">
         🔥 このゲームを布教する（クリックして投稿フォームを開く）
@@ -842,13 +885,12 @@ MYPAGE_HTML = """
 </div>
 """
 
-NEW_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲームを追加する</h2>{% if error_msg %}<div style="background: rgba(239, 68, 68, 0.1); color: var(--danger); padding: 1rem; border-left: 4px solid var(--danger); margin-bottom: 1.5rem;">⚠️ {{ error_msg }}</div>{% endif %}<form action="/games/new" method="post"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ title | default('') }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if genre == g or (not genre and g == "その他 / 不明") %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ platform | default('') }}"></div><div class="form-group"><label>画像URL（任意）:</label><input type="text" name="image_url" value="{{ image_url | default('') }}"></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ description | default('') }}</textarea></div><button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 1rem;">ゲームを登録する</button></form></div>"""
-EDIT_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲーム情報を編集する</h2><form action="/games/{{ game.id }}/edit" method="post"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ game.title }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if game.genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ game.platform | default('') }}"></div><div class="form-group"><label>画像URL（任意）:</label><input type="text" name="image_url" value="{{ game.image_url | default('') }}"></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game.id }}" class="btn btn-outline" style="flex: 1; text-align:center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
+NEW_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲームを追加する</h2>{% if error_msg %}<div style="background: rgba(239, 68, 68, 0.1); color: var(--danger); padding: 1rem; border-left: 4px solid var(--danger); margin-bottom: 1.5rem;">⚠️ {{ error_msg }}</div>{% endif %}<form action="/games/new" method="post"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ title | default('') }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if genre == g or (not genre and g == "その他 / 不明") %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ platform | default('') }}"></div><div class="form-group"><label>ゲーム画像（任意・自動で最適なサイズに圧縮されます）:</label><input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;"><input type="hidden" name="image_base64" id="image_base64"><div id="image_preview" style="margin-top: 1rem; display: none;"><img id="preview_img" src="" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ description | default('') }}</textarea></div><button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 1rem;">ゲームを登録する</button></form></div>"""
+EDIT_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲーム情報を編集する</h2><form action="/games/{{ game.id }}/edit" method="post"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ game.title }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if game.genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ game.platform | default('') }}"></div><div class="form-group"><label>ゲーム画像（新しくアップロードして変更する場合のみ選択）:</label><input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;"><input type="hidden" name="image_base64" id="image_base64"><input type="hidden" name="existing_image_url" value="{{ game.image_url | default('') }}"><div id="image_preview" style="margin-top: 1rem; display: {% if game.image_url %}block{% else %}none{% endif %};"><img id="preview_img" src="{{ game.image_url | default('') }}" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game.id }}" class="btn btn-outline" style="flex: 1; text-align:center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
 EDIT_POST_HTML = """<div class="card" style="border-color: var(--accent);"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: var(--accent);">自分の布教を編集する</h2><form action="/games/{{ game_id }}/posts/{{ post.id }}/edit" method="post"><div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="{{ post.username }}" required></div><div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;"><div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" value="{{ post.catchphrase | default('') }}" required style="border-color: rgba(245, 158, 11, 0.5);"></div><div style="display: flex; gap: 1rem; margin-bottom: 0; flex-wrap: wrap;"><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" value="{{ post.target_audience | default('') }}"></div><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" value="{{ post.play_time | default('') }}"></div></div></div><div class="form-group"><label>ネタバレレベル:</label><div class="spoiler-radio-group"><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" {% if post.spoiler_level == 0 %}checked{% endif %}> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1" {% if post.spoiler_level == 1 %}checked{% endif %}> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2" {% if post.spoiler_level == 2 %}checked{% endif %}> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div></label></div></div><div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required>{{ post.content }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game_id }}" class="btn btn-outline" style="flex: 1; text-align: center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
 
 def render_page(content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, **kwargs):
     content_html = Template(content_template_str).render(**kwargs)
-    
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
     final_desc = og_description if og_description else "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。"
     
@@ -876,26 +918,17 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
         }
         
         search_words = synonyms.get(q, [q])
-        
         word_conditions = []
         for word in search_words:
             search_pattern = '%' + word + '%'
             params.extend([search_pattern] * 6)
             word_conditions.append("""(
-                g.title ILIKE %s
-                OR COALESCE(g.description, '') ILIKE %s
-                OR EXISTS (
-                    SELECT 1 FROM posts sp
-                    WHERE sp.game_id = g.id
-                    AND (
-                        COALESCE(sp.catchphrase, '') ILIKE %s
-                        OR COALESCE(sp.target_audience, '') ILIKE %s
-                        OR COALESCE(sp.play_time, '') ILIKE %s
-                        OR COALESCE(sp.content, '') ILIKE %s
+                g.title ILIKE %s OR COALESCE(g.description, '') ILIKE %s OR EXISTS (
+                    SELECT 1 FROM posts sp WHERE sp.game_id = g.id AND (
+                        COALESCE(sp.catchphrase, '') ILIKE %s OR COALESCE(sp.target_audience, '') ILIKE %s OR COALESCE(sp.play_time, '') ILIKE %s OR COALESCE(sp.content, '') ILIKE %s
                     )
                 )
             )""")
-        
         query += " AND (" + " OR ".join(word_conditions) + ")"
 
     if genre: query += " AND g.genre = %s"; params.append(genre)
@@ -917,10 +950,11 @@ async def random_game():
 async def new_game_form(): return render_page(NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge")
 
 @app.post("/games/new")
-async def create_game(title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_url: str = Form("")):
+async def create_game(title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form("")):
+    image_url = upload_image_to_supabase(image_base64)
     with get_db_connection() as conn:
         if conn.execute('SELECT id FROM games WHERE LOWER(title) = LOWER(%s)', (title,)).fetchone():
-            return render_page(NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, image_url=image_url, page_title="ゲームを追加する - Oshi-Ge")
+            return render_page(NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, page_title="ゲームを追加する - Oshi-Ge")
         
         cursor = conn.execute('INSERT INTO games (title, description, genre, platform, image_url) VALUES (%s, %s, %s, %s, %s) RETURNING id', (title, description, genre, platform, image_url))
         game_id = cursor.fetchone()["id"]
@@ -935,7 +969,12 @@ async def edit_game_form(game_id: int):
     return render_page(EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/edit")
-async def update_game(game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_url: str = Form("")):
+async def update_game(game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""), existing_image_url: str = Form("")):
+    image_url = existing_image_url
+    if image_base64:
+        new_url = upload_image_to_supabase(image_base64)
+        if new_url: image_url = new_url
+
     with get_db_connection() as conn:
         conn.execute('UPDATE games SET title = %s, description = %s, genre = %s, platform = %s, image_url = %s WHERE id = %s', (title, description, genre, platform, image_url, game_id))
         conn.commit()
