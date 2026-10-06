@@ -82,7 +82,7 @@ main { max-width: 1000px; margin: 0 auto; padding: 2rem 1rem; }
 }
 .card { background: var(--card-bg); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
 h2, h3 { margin-top: 0; color: var(--text-main); }
-.btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-weight: bold; transition: all 0.2s; font-size: 1rem; }
+.btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-weight: bold; transition: all 0.2s; font-size: 1rem; white-space: nowrap; }
 .btn-primary { background-color: var(--accent); color: #fff; box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3); }
 .btn-primary:hover { background-color: var(--accent-hover); transform: translateY(-2px); }
 .btn-outline { background-color: transparent; border: 2px solid var(--border); color: var(--text-main); }
@@ -92,7 +92,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn-x:hover { background-color: #222; }
 .btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #05a546;}
 .btn-line:hover { background-color: #05a546; }
-.btn-bookmark { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9rem; transition: 0.2s;}
+.btn-bookmark { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9rem; transition: 0.2s; white-space: nowrap; }
 .btn-bookmark.bookmarked { background: rgba(16, 185, 129, 0.1); border-color: var(--safe); color: var(--safe); }
 .form-group { margin-bottom: 1.5rem; }
 .form-group label { display: block; margin-bottom: 0.5rem; font-weight: bold; color: #cbd5e1; }
@@ -136,6 +136,11 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .search-inputs input, .search-inputs select, .search-inputs button { width: 100%; box-sizing: border-box; }
     .game-grid { grid-template-columns: 1fr; }
     .card { padding: 1rem; }
+    
+    /* スマホでのゲーム詳細タイトル横ボタンの縦書き崩れ防止 */
+    .game-header-row { flex-direction: column; align-items: stretch !important; gap: 0.75rem !important; }
+    .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+    .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
 }
 
 /* 探し方・布教カード追加 */
@@ -692,9 +697,9 @@ INDEX_HTML = """
 
 GAME_HTML = """
 <div class="card" style="position: relative;">
-    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
-        <h2 style="font-size: 2rem; margin: 0; font-weight: 900;">{{ game.title }}</h2>
-        <div style="display:flex; gap: 0.5rem;">
+    <div class="game-header-row" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+        <h2 style="font-size: 2rem; margin: 0; font-weight: 900; word-break: break-all;">{{ game.title }}</h2>
+        <div class="game-header-actions" style="display:flex; gap: 0.5rem; flex-shrink: 0;">
             <button type="button" class="btn-bookmark {% if is_bookmarked %}bookmarked{% endif %}" onclick="toggleBookmark({{ game.id }}, this)">
                 {% if is_bookmarked %}🔖 お気に入り解除{% else %}🔖 お気に入りに追加{% endif %}
             </button>
@@ -803,7 +808,7 @@ GAME_HTML = """
             <button type="button" class="btn btn-outline" onclick="closePromoCard()">閉じる</button>
         </div>
         <div id="promo-instruction" style="color:var(--text-sub); font-size:0.9rem; margin-top:0.7rem;">
-            এইカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。
+            このカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。
         </div>
     </div>
 </div>
