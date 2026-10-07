@@ -184,56 +184,109 @@ async def generate_ogp(game_id: int):
     img.save(img_byte_arr, format='PNG')
     return Response(content=img_byte_arr.getvalue(), media_type="image/png")
 
-
 # --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
-:root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
+:root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
 html { font-size: 14px; }
 body { font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 0; line-height: 1.6; }
 .header-container { background-color: #0b1120; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
-.header-container h1 { margin: 0; font-size: 1.8rem; font-weight: 900; }
+.header-container h1 { margin: 0; font-size: 1.8rem; font-weight: 900; letter-spacing: 0.05em; font-family: 'Arial Black', sans-serif;}
 .header-container h1 a { color: var(--accent); text-decoration: none; transition: color 0.2s; }
+.header-container h1 a:hover { color: var(--text-main); }
 main { max-width: 1000px; margin: 0 auto; padding: 2rem 1rem; }
 .hero { text-align: center; padding: 3rem 1rem 4rem; background: radial-gradient(circle at top, #1e293b 0%, #0f172a 100%); border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
 .hero h2 { font-size: 2.5rem; margin: 0 0 1rem 0; color: var(--accent); font-weight: 900; }
 .hero p { color: var(--text-sub); font-size: 1.1rem; margin-bottom: 2rem; }
 .search-bar-advanced { max-width: 800px; margin: 0 auto; background: rgba(15, 23, 42, 0.8); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 1rem;}
 .search-inputs { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.search-inputs input, .search-inputs select { padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white; font-size: 1rem; flex: 1;}
-.search-inputs button { font-size: 1.1rem; }
+.search-inputs input, .search-inputs select { padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white; font-size: 1rem; }
+.search-inputs input { flex: 2; min-width: 200px; }
+.search-inputs select { flex: 1; min-width: 130px; }
+.search-inputs button { flex: 1; min-width: 120px; font-size: 1.1rem; }
+.search-inputs input:focus, .search-inputs select:focus { outline: none; border-color: var(--accent); }
 .layout-wrapper { display: flex; gap: 2rem; align-items: flex-start; }
 .main-column { flex: 1; min-width: 0; }
 .sidebar-column { width: 300px; flex-shrink: 0; }
-@media (max-width: 850px) { .layout-wrapper { flex-direction: column; } .sidebar-column { width: 100%; order: -1; } }
-.card { background: var(--card-bg); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 12px; border: 1px solid var(--border); }
-.btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-weight: bold; transition: all 0.2s; }
-.btn-primary { background-color: var(--accent); color: #fff; }
+@media (max-width: 850px) { 
+    .layout-wrapper { flex-direction: column; } 
+    .sidebar-column { width: 100%; order: -1; margin-bottom: 1.5rem; } 
+}
+.card { background: var(--card-bg); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
+h2, h3 { margin-top: 0; color: var(--text-main); }
+.btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-weight: bold; transition: all 0.2s; font-size: 1rem; white-space: nowrap; }
+.btn-primary { background-color: var(--accent); color: #fff; box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3); }
+.btn-primary:hover { background-color: var(--accent-hover); transform: translateY(-2px); }
 .btn-outline { background-color: transparent; border: 2px solid var(--border); color: var(--text-main); }
+.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 .btn-small { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
-.btn-x { background-color: #000; color: #fff; padding: 0.5rem 1rem; border: 1px solid #333; }
-.btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; border: 1px solid #05a546;}
+.btn-x { background-color: #000; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #333; }
+.btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #05a546;}
+.btn-bookmark { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9rem; transition: 0.2s; white-space: nowrap; }
+.btn-bookmark.bookmarked { background: rgba(16, 185, 129, 0.1); border-color: var(--safe); color: var(--safe); }
 .form-group { margin-bottom: 1.5rem; }
 .form-group label { display: block; margin-bottom: 0.5rem; font-weight: bold; color: #cbd5e1; }
-.form-group input[type="text"], .form-group textarea, .form-group select { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; box-sizing: border-box; }
+.form-group input[type="text"], .form-group textarea, .form-group select { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; box-sizing: border-box; font-size: 1rem; font-family: inherit; }
+.form-group input[type="file"] { width: 100%; color: var(--text-main); padding: 0.5rem 0; }
+.form-group input[type="checkbox"] { width: auto; transform: scale(1.2); cursor: pointer; margin-right: 0.5rem; }
 .spoiler-radio-group { background: #0b1120; padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border); }
 .radio-label { display: flex; flex-direction: column; margin-bottom: 1rem; cursor: pointer; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
 .radio-label:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+.radio-header { display: flex; align-items: center; font-weight: bold; font-size: 1.05rem; }
 .tag { display: inline-block; background: #334155; color: #e2e8f0; padding: 0.3rem 0.8rem; border-radius: 9999px; font-size: 0.85rem; font-weight: bold; margin-bottom: 0.5rem; margin-right: 0.5rem; }
+.tag.genre { background: rgba(245, 158, 11, 0.2); color: var(--accent); border: 1px solid rgba(245, 158, 11, 0.3); }
 .tag.oshi-point { background: rgba(236, 72, 153, 0.15); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.4); }
 .game-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.5rem; }
-.game-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; cursor: pointer; }
+.game-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; transition: transform 0.2s; display: flex; flex-direction: column; cursor: pointer; }
+.game-card:hover { transform: translateY(-4px); border-color: var(--accent); }
 .game-thumbnail { width: 100%; height: 150px; object-fit: cover; background: #334155; }
+.game-thumbnail.empty { display: flex; align-items: center; justify-content: center; color: var(--text-sub); font-weight: bold; background: linear-gradient(45deg, #1e293b, #0f172a); }
 .game-card-body { padding: 1.2rem; flex-grow: 1; display: flex; flex-direction: column; }
+.latest-catchphrase { margin-top: auto; padding: 0.8rem; background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent); border-radius: 4px; font-size: 0.9rem; font-weight: bold; color: #fcd34d; }
+.game-hero-image { width: 100%; max-height: 400px; object-fit: cover; border-radius: 8px; margin-bottom: 1.5rem; border: 1px solid var(--border); }
 .post-card { background: #0f172a; border: 1px solid var(--border); }
+.post-header { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; color: var(--text-sub); margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
 .catchphrase-text { margin: 0 0 0.75rem 0; color: var(--accent); font-size: 1.3rem; font-weight: 900; line-height: 1.4; }
+.meta-tag { background: transparent; color: #94a3b8; padding: 0.2rem 0.6rem; border-radius: 4px; border: 1px solid #475569; font-size: 0.85rem;}
 .spoiler-badge.safe { color: var(--safe); font-weight: bold; font-size: 0.9rem; display: inline-flex; background: rgba(16, 185, 129, 0.1); padding: 0.3rem 0.6rem; border-radius: 6px; }
 .post-content p { font-size: 1.05rem; margin-top: 0.75rem; white-space: pre-wrap; }
-.spoiler-toggle-btn { width: 100%; padding: 1rem; font-weight: bold; border: 2px dashed; border-radius: 8px; cursor: pointer; background: transparent; }
+.spoiler-toggle-btn { width: 100%; padding: 1rem; font-weight: bold; border: 2px dashed; border-radius: 8px; cursor: pointer; background: transparent; transition: all 0.2s; font-size: 1rem; }
+.spoiler-toggle-btn.warning { color: var(--warning); border-color: rgba(245, 158, 11, 0.5); }
+.spoiler-toggle-btn.danger { color: var(--danger); border-color: rgba(239, 68, 68, 0.5); }
+.spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
+
+/* 検索ボタンのハイライトとデザイン */
+.discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
+.discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
+.quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
+.quick-filter { display: flex; align-items: center; justify-content: center; min-height: 46px; padding: 0.6rem 0.8rem; background: #0f172a; border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); text-decoration: none; font-weight: bold; text-align: center; transition: 0.2s; }
+.quick-filter:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+.quick-filter.active { background-color: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 6px rgba(245,158,11,0.2); }
+
+@media (max-width: 600px) {
+    html { font-size: 16px; }
+    .header-container { flex-direction: column; gap: 1rem; text-align: center; padding: 1rem; }
+    .header-container h1 { font-size: 1.5rem; }
+    .hero { padding: 2rem 1rem; }
+    .hero h2 { font-size: 1.8rem; }
+    .search-inputs { flex-direction: column; }
+    .search-inputs input, .search-inputs select, .search-inputs button { width: 100%; box-sizing: border-box; }
+    .game-grid { grid-template-columns: 1fr; }
+    .card { padding: 1rem; }
+    .game-header-row { flex-direction: column; align-items: stretch !important; gap: 0.75rem !important; }
+    .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+    .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
+}
+
 .promo-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 9999; }
 .promo-modal-box { width: min(900px, 100%); max-height: 95vh; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 1rem; box-sizing: border-box; }
+.promo-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.8rem; }
+.promo-modal-head h3 { margin: 0; color: var(--accent); }
+.promo-canvas-wrap { background: #0b1120; border-radius: 10px; padding: 0.75rem; border: 1px solid var(--border); }
 #promoCanvas { display: block; width: 100%; height: auto; border-radius: 8px; }
+.promo-modal-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
+.cropper-view-box, .cropper-face { border-radius: 4px; }
 """
 
 JS = """
@@ -657,6 +710,26 @@ BASE_HTML = """
             </form>
         </div>
     </div>
+
+    <!-- 布教カード用モーダル（復旧） -->
+    <div id="promo-card-modal" class="promo-modal" style="display:none; z-index: 10000;" onclick="if(event.target===this) closePromoCard();">
+        <div class="promo-modal-box" style="width: min(1080px, 100%); background: #0f172a; padding: 0; overflow: hidden; border: 1px solid var(--border);">
+            <div class="promo-modal-head" style="padding: 1rem; margin: 0; background: #1e293b; border-bottom: 1px solid var(--border);">
+                <h3 style="margin: 0; color: #f8fafc;">🎴 布教カード</h3>
+                <button type="button" class="btn btn-outline btn-small" onclick="closePromoCard()" style="color: #fff; border-color: #475569;">✕ 閉じる</button>
+            </div>
+            <div style="padding: 1rem; max-height: 80vh; overflow-y: auto;">
+                <p id="promo-instruction" style="color: var(--text-sub); font-size: 0.9rem; margin-top: 0; text-align:center;">画像長押し、または保存ボタンでダウンロードしてSNSでシェアしてください！</p>
+                <div class="promo-canvas-wrap" style="background: transparent; border: none; padding: 0; display:flex; justify-content:center;">
+                    <canvas id="promoCanvas" style="max-width: 100%; height: auto; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5);"></canvas>
+                </div>
+                <div class="promo-modal-actions" style="justify-content: center; margin-top: 1rem;">
+                    <button type="button" id="promo-dl-btn" class="btn btn-primary" onclick="downloadPromoCard()" style="font-size: 1.1rem; padding: 0.8rem 2rem;">📥 画像を保存する</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script>{{ js }}</script>
 </body>
 </html>
@@ -853,7 +926,7 @@ GAME_HTML = """
                     data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
                     data-img="{{ game.image_url | default('') | escape }}" 
                     data-oshi="{{ post.oshi_points | default('') | escape }}" 
-                    onclick="openPromoCard(this)">🎴 布教カード</button>
+                    onclick="openPromoCard(this)"> 布教カード</button>
 
                 <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
             </div>
@@ -904,7 +977,7 @@ MYPAGE_HTML = """
             
             <div style="color: var(--text-sub); font-size: 0.9rem; margin-bottom: 1rem;">👍 いいね: {{ post.likes | default(0) }}</div>
             <div style="display: flex; gap: 0.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𕏿 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                 
                 <button type="button" class="btn btn-outline btn-small" 
@@ -920,7 +993,7 @@ MYPAGE_HTML = """
                     data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
                     data-img="{{ post.game_image_url | default('') | escape }}" 
                     data-oshi="{{ post.oshi_points | default('') | escape }}" 
-                    onclick="openPromoCard(this)">🎴 布教カード</button>
+                    onclick="openPromoCard(this)"> 布教カード</button>
             </div>
         </div>
         {% else %}
