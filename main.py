@@ -256,7 +256,6 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
 
-/* 検索ボタンのハイライトとデザイン */
 .discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
 .discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
 .quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
@@ -315,7 +314,7 @@ function sharePost(btn, platform) {
         if (Array.from(impression).length > 20) impression = Array.from(impression).slice(0, 20).join('') + '…';
         text += `\\n\\n💬「${impression}」`;
     } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
-    else if (spoilerLevel === 2) text += `\\n\\n⚠️️ ネタバレあり`;
+    else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
     text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n#OshiGe`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
@@ -494,7 +493,6 @@ async function drawPromoCard() {
 
     if (spoiler > 0) contentRaw = '（※詳細な感想は、ネタバレ防止のためサイト上で確認してください）';
 
-    // 行数計算ヘルパー
     function getLines(text, maxWidth, font, maxLines) {
         if(!text) return 0;
         ctx.font = font;
@@ -510,7 +508,6 @@ async function drawPromoCard() {
         return maxLines ? Math.min(lines, maxLines) : lines;
     }
 
-    // 1. 画像のロードを先に行う
     let img = null;
     let drawH = 607;
     if (imageUrl) {
@@ -523,7 +520,6 @@ async function drawPromoCard() {
         } catch(e) {}
     }
 
-    // 2. Y座標のシミュレーションと Canvasサイズの決定（可変対応）
     let catchY = 650;
     if (drawH > 600 && drawH < 800) { catchY = drawH + 40; }
     else if (drawH >= 800) { catchY = 840; }
@@ -555,10 +551,8 @@ async function drawPromoCard() {
     const panelH = simY - panelY + 20;
     const H = Math.max(1350, panelY + panelH + 100);
     
-    // Canvasサイズ確定
     canvas.width = W; canvas.height = H;
 
-    // 3. 実際の描画
     const bg = ctx.createLinearGradient(0, 0, 0, H);
     bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
     ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
@@ -962,7 +956,7 @@ GAME_HTML = """
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𕏿 で共有</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                 
                 <button type="button" class="btn btn-outline btn-small" 
@@ -1029,7 +1023,7 @@ MYPAGE_HTML = """
             
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                    <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𕏿 で共有</button>
+                    <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                     <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                     
                     <button type="button" class="btn btn-outline btn-small" 
