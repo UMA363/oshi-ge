@@ -95,7 +95,6 @@ def init_db():
 
 init_db()
 
-# --- SEO関連エンドポイント（robots.txt / sitemap.xml） ---
 @app.get("/robots.txt", response_class=Response)
 async def robots_txt(request: Request):
     host = request.headers.get("host", "")
@@ -281,6 +280,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
+
 .discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
 .discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
 .quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
@@ -302,6 +302,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
     .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
 }
+
 .promo-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 9999; }
 .promo-modal-box { width: min(900px, 100%); max-height: 95vh; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 1rem; box-sizing: border-box; }
 .promo-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.8rem; }
@@ -926,7 +927,7 @@ GAME_HTML = """
     </div>
 
     <div style="display: flex; gap: 0.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
-        <button type="button" class="btn btn-x" onclick="shareGameToX('{{ game.title }}')">𝕏 でゲームを共有</button>
+        <button type="button" class="btn btn-x" onclick="shareGameToX('{{ game.title }}')">X でゲームを共有</button>
         <button type="button" class="btn btn-line" onclick="shareGameToLine('{{ game.title }}')">LINE でゲームを共有</button>
     </div>
 </div>
@@ -1008,7 +1009,7 @@ GAME_HTML = """
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𕏿 で共有</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">X で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                 
                 <button type="button" class="btn btn-outline btn-small" 
@@ -1025,7 +1026,7 @@ GAME_HTML = """
                     data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
                     data-img="{{ game.image_url | default('') | escape }}" 
                     data-oshi="{{ post.oshi_points | default('') | escape }}" 
-                    onclick="openPromoCard(this)"> 布教カード</button>
+                    onclick="openPromoCard(this)">🎴 布教カード</button>
 
                 <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
             </div>
@@ -1076,7 +1077,7 @@ MYPAGE_HTML = """
             
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                    <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𕏿 で共有</button>
+                    <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">X で共有</button>
                     <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                     
                     <button type="button" class="btn btn-outline btn-small" 
@@ -1093,7 +1094,7 @@ MYPAGE_HTML = """
                         data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
                         data-img="{{ post.game_image_url | default('') | escape }}" 
                         data-oshi="{{ post.oshi_points | default('') | escape }}" 
-                        onclick="openPromoCard(this)"> 布教カード</button>
+                        onclick="openPromoCard(this)">🎴 布教カード</button>
                 </div>
                 <div style="color: var(--text-sub); font-size: 0.9rem; font-weight: bold; flex-shrink: 0;">👍 いいね: {{ post.likes | default(0) }}</div>
             </div>
