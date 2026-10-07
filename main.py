@@ -12,8 +12,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Template
 import psycopg
 from psycopg.rows import dict_row
-
-# 画像合成ライブラリ
 from PIL import Image, ImageDraw, ImageFont
 
 app = FastAPI()
@@ -22,24 +20,21 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# --- 日本語フォントの自動ダウンロード（動的OGP用） ---
 FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
 FONT_PATH = "NotoSansCJKjp-Bold.otf"
 
 def download_font():
     if not os.path.exists(FONT_PATH):
         try:
-            print("Downloading Japanese Font for OGP...")
             req = urllib.request.Request(FONT_URL, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as response:
                 with open(FONT_PATH, 'wb') as f:
                     f.write(response.read())
         except Exception as e:
-            print("Font download error:", e)
+            pass
 
 download_font()
 
-# --- 簡易レートリミット（連投スパム対策） ---
 POST_COOLDOWN = 30
 ip_last_post_time = defaultdict(float)
 
@@ -72,10 +67,8 @@ def upload_image_to_supabase(base64_data: str) -> str:
             pass
         return f"{SUPABASE_URL}/storage/v1/object/public/games/{filename}"
     except Exception as e:
-        print("Image upload error:", e)
         return ""
 
-# --- 1. データベース初期化 ---
 def init_db():
     try:
         with get_db_connection() as conn:
@@ -86,11 +79,9 @@ def init_db():
                 id SERIAL PRIMARY KEY, game_id INTEGER REFERENCES games(id), username TEXT NOT NULL,
                 content TEXT NOT NULL, spoiler_level INTEGER DEFAULT 0, catchphrase TEXT,
                 target_audience TEXT, play_time TEXT, likes INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-            
             conn.execute('''CREATE TABLE IF NOT EXISTS reports (
                 id SERIAL PRIMARY KEY, post_id INTEGER REFERENCES posts(id), 
                 reason TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
@@ -100,11 +91,10 @@ def init_db():
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS oshi_points TEXT DEFAULT ''")
             conn.commit()
     except Exception as e:
-        print("DB Init error:", e)
+        pass
 
 init_db()
 
-# --- 1.5 画像中継プロキシ ---
 @app.get("/proxy-image")
 async def proxy_image(url: str):
     try:
@@ -116,7 +106,6 @@ async def proxy_image(url: str):
     except Exception:
         raise HTTPException(status_code=404)
 
-# --- 1.8 動的OGP生成エンドポイント ---
 @app.get("/games/{game_id}/ogp.png")
 async def generate_ogp(game_id: int):
     with get_db_connection() as conn:
@@ -128,7 +117,6 @@ async def generate_ogp(game_id: int):
     W, H = 1200, 630
     img = Image.new('RGB', (W, H), color='#0f172a')
     
-    # 背景画像（ゲーム画像）を暗くして敷く
     if game.get("image_url"):
         try:
             req = urllib.request.Request(game["image_url"], headers={'User-Agent': 'Mozilla/5.0'})
@@ -146,14 +134,13 @@ async def generate_ogp(game_id: int):
                     offset = (bg_img.height - new_h) // 2
                     bg_img = bg_img.crop((0, offset, bg_img.width, offset + new_h))
                 bg_img = bg_img.resize((W, H))
-                overlay = Image.new('RGBA', (W, H), color=(15, 23, 42, 200)) # 暗いオーバーレイ
+                overlay = Image.new('RGBA', (W, H), color=(15, 23, 42, 200))
                 bg_img = Image.alpha_composite(bg_img, overlay)
                 img.paste(bg_img.convert('RGB'), (0, 0))
-        except Exception as e:
-            print("OGP Bg Error:", e)
+        except:
+            pass
 
     draw = ImageDraw.Draw(img)
-    
     try:
         font_title = ImageFont.truetype(FONT_PATH, 56)
         font_catch = ImageFont.truetype(FONT_PATH, 46)
@@ -163,20 +150,15 @@ async def generate_ogp(game_id: int):
         font_catch = ImageFont.load_default()
         font_brand = ImageFont.load_default()
 
-    # Oshi-Ge ロゴと装飾
     draw.rectangle([(0, 0), (16, H)], fill="#f59e0b")
     draw.text((60, 40), "🎮 Oshi-Ge", font=font_brand, fill="#f59e0b")
     
-    # ゲームタイトル
     title_text = game['title']
     draw.text((60, 130), title_text, font=font_title, fill="#ffffff")
     draw.line([(60, 210), (1140, 210)], fill="#334155", width=2)
     
-    # キャッチコピー
     if post and post['catchphrase']:
         catch_text = f"「{post['catchphrase']}」"
-        
-        # 長いキャッチコピーの改行処理
         chars = list(catch_text)
         line = ""
         lines = []
@@ -189,7 +171,7 @@ async def generate_ogp(game_id: int):
         if line: lines.append(line)
         
         y_text = 270
-        for l in lines[:3]: # 最大3行まで
+        for l in lines[:3]:
             draw.text((60, y_text), l, font=font_catch, fill="#fcd34d")
             y_text += 65
             
@@ -202,105 +184,56 @@ async def generate_ogp(game_id: int):
     img.save(img_byte_arr, format='PNG')
     return Response(content=img_byte_arr.getvalue(), media_type="image/png")
 
+
 # --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
-:root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
+:root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
 html { font-size: 14px; }
 body { font-family: 'Helvetica Neue', Arial, 'Hiragino Sans', sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 0; line-height: 1.6; }
 .header-container { background-color: #0b1120; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
-.header-container h1 { margin: 0; font-size: 1.8rem; font-weight: 900; letter-spacing: 0.05em; font-family: 'Arial Black', sans-serif;}
+.header-container h1 { margin: 0; font-size: 1.8rem; font-weight: 900; }
 .header-container h1 a { color: var(--accent); text-decoration: none; transition: color 0.2s; }
-.header-container h1 a:hover { color: var(--text-main); }
 main { max-width: 1000px; margin: 0 auto; padding: 2rem 1rem; }
 .hero { text-align: center; padding: 3rem 1rem 4rem; background: radial-gradient(circle at top, #1e293b 0%, #0f172a 100%); border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
 .hero h2 { font-size: 2.5rem; margin: 0 0 1rem 0; color: var(--accent); font-weight: 900; }
 .hero p { color: var(--text-sub); font-size: 1.1rem; margin-bottom: 2rem; }
 .search-bar-advanced { max-width: 800px; margin: 0 auto; background: rgba(15, 23, 42, 0.8); padding: 1rem; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 1rem;}
 .search-inputs { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.search-inputs input, .search-inputs select { padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white; font-size: 1rem; }
-.search-inputs input { flex: 2; min-width: 200px; }
-.search-inputs select { flex: 1; min-width: 130px; }
-.search-inputs button { flex: 1; min-width: 120px; font-size: 1.1rem; }
-.search-inputs input:focus, .search-inputs select:focus { outline: none; border-color: var(--accent); }
+.search-inputs input, .search-inputs select { padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white; font-size: 1rem; flex: 1;}
+.search-inputs button { font-size: 1.1rem; }
 .layout-wrapper { display: flex; gap: 2rem; align-items: flex-start; }
 .main-column { flex: 1; min-width: 0; }
 .sidebar-column { width: 300px; flex-shrink: 0; }
-@media (max-width: 850px) { 
-    .layout-wrapper { flex-direction: column; } 
-    .sidebar-column { width: 100%; order: -1; margin-bottom: 1.5rem; } 
-}
-.card { background: var(--card-bg); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 12px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); }
-h2, h3 { margin-top: 0; color: var(--text-main); }
-.btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-weight: bold; transition: all 0.2s; font-size: 1rem; white-space: nowrap; }
-.btn-primary { background-color: var(--accent); color: #fff; box-shadow: 0 2px 4px rgba(245, 158, 11, 0.3); }
-.btn-primary:hover { background-color: var(--accent-hover); transform: translateY(-2px); }
+@media (max-width: 850px) { .layout-wrapper { flex-direction: column; } .sidebar-column { width: 100%; order: -1; } }
+.card { background: var(--card-bg); padding: 1.5rem; margin-bottom: 1.5rem; border-radius: 12px; border: 1px solid var(--border); }
+.btn { display: inline-flex; align-items: center; justify-content: center; padding: 0.75rem 1.5rem; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; font-weight: bold; transition: all 0.2s; }
+.btn-primary { background-color: var(--accent); color: #fff; }
 .btn-outline { background-color: transparent; border: 2px solid var(--border); color: var(--text-main); }
-.btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 .btn-small { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
-.btn-x { background-color: #000; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #333; }
-.btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #05a546;}
-.btn-bookmark { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9rem; transition: 0.2s; white-space: nowrap; }
-.btn-bookmark.bookmarked { background: rgba(16, 185, 129, 0.1); border-color: var(--safe); color: var(--safe); }
+.btn-x { background-color: #000; color: #fff; padding: 0.5rem 1rem; border: 1px solid #333; }
+.btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; border: 1px solid #05a546;}
 .form-group { margin-bottom: 1.5rem; }
 .form-group label { display: block; margin-bottom: 0.5rem; font-weight: bold; color: #cbd5e1; }
-.form-group input[type="text"], .form-group textarea, .form-group select { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; box-sizing: border-box; font-size: 1rem; font-family: inherit; }
-.form-group input[type="file"] { width: 100%; color: var(--text-main); padding: 0.5rem 0; }
-.form-group input[type="checkbox"] { width: auto; transform: scale(1.2); cursor: pointer; margin-right: 0.5rem; }
+.form-group input[type="text"], .form-group textarea, .form-group select { width: 100%; padding: 0.75rem; background: #0f172a; border: 1px solid var(--border); color: var(--text-main); border-radius: 8px; box-sizing: border-box; }
 .spoiler-radio-group { background: #0b1120; padding: 1.25rem; border-radius: 8px; border: 1px solid var(--border); }
 .radio-label { display: flex; flex-direction: column; margin-bottom: 1rem; cursor: pointer; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
 .radio-label:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
-.radio-header { display: flex; align-items: center; font-weight: bold; font-size: 1.05rem; }
 .tag { display: inline-block; background: #334155; color: #e2e8f0; padding: 0.3rem 0.8rem; border-radius: 9999px; font-size: 0.85rem; font-weight: bold; margin-bottom: 0.5rem; margin-right: 0.5rem; }
-.tag.genre { background: rgba(245, 158, 11, 0.2); color: var(--accent); border: 1px solid rgba(245, 158, 11, 0.3); }
 .tag.oshi-point { background: rgba(236, 72, 153, 0.15); color: #f472b6; border: 1px solid rgba(236, 72, 153, 0.4); }
 .game-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1.5rem; }
-.game-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; transition: transform 0.2s; display: flex; flex-direction: column; cursor: pointer; }
-.game-card:hover { transform: translateY(-4px); border-color: var(--accent); }
+.game-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; cursor: pointer; }
 .game-thumbnail { width: 100%; height: 150px; object-fit: cover; background: #334155; }
-.game-thumbnail.empty { display: flex; align-items: center; justify-content: center; color: var(--text-sub); font-weight: bold; background: linear-gradient(45deg, #1e293b, #0f172a); }
 .game-card-body { padding: 1.2rem; flex-grow: 1; display: flex; flex-direction: column; }
-.latest-catchphrase { margin-top: auto; padding: 0.8rem; background: rgba(245, 158, 11, 0.1); border-left: 3px solid var(--accent); border-radius: 4px; font-size: 0.9rem; font-weight: bold; color: #fcd34d; }
-.game-hero-image { width: 100%; max-height: 400px; object-fit: cover; border-radius: 8px; margin-bottom: 1.5rem; border: 1px solid var(--border); }
 .post-card { background: #0f172a; border: 1px solid var(--border); }
-.post-header { display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem; color: var(--text-sub); margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.75rem; }
 .catchphrase-text { margin: 0 0 0.75rem 0; color: var(--accent); font-size: 1.3rem; font-weight: 900; line-height: 1.4; }
-.meta-tag { background: transparent; color: #94a3b8; padding: 0.2rem 0.6rem; border-radius: 4px; border: 1px solid #475569; font-size: 0.85rem;}
 .spoiler-badge.safe { color: var(--safe); font-weight: bold; font-size: 0.9rem; display: inline-flex; background: rgba(16, 185, 129, 0.1); padding: 0.3rem 0.6rem; border-radius: 6px; }
 .post-content p { font-size: 1.05rem; margin-top: 0.75rem; white-space: pre-wrap; }
-.spoiler-toggle-btn { width: 100%; padding: 1rem; font-weight: bold; border: 2px dashed; border-radius: 8px; cursor: pointer; background: transparent; transition: all 0.2s; font-size: 1rem; }
-.spoiler-toggle-btn.warning { color: var(--warning); border-color: rgba(245, 158, 11, 0.5); }
-.spoiler-toggle-btn.danger { color: var(--danger); border-color: rgba(239, 68, 68, 0.5); }
-.spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
+.spoiler-toggle-btn { width: 100%; padding: 1rem; font-weight: bold; border: 2px dashed; border-radius: 8px; cursor: pointer; background: transparent; }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
-.quick-filter.active { background-color: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 6px rgba(245,158,11,0.2); }
-@media (max-width: 600px) {
-    html { font-size: 16px; }
-    .header-container { flex-direction: column; gap: 1rem; text-align: center; padding: 1rem; }
-    .header-container h1 { font-size: 1.5rem; }
-    .hero { padding: 2rem 1rem; }
-    .hero h2 { font-size: 1.8rem; }
-    .search-inputs { flex-direction: column; }
-    .search-inputs input, .search-inputs select, .search-inputs button { width: 100%; box-sizing: border-box; }
-    .game-grid { grid-template-columns: 1fr; }
-    .card { padding: 1rem; }
-    .game-header-row { flex-direction: column; align-items: stretch !important; gap: 0.75rem !important; }
-    .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
-    .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
-}
-.discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
-.discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
-.quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
-.quick-filter { display: flex; align-items: center; justify-content: center; min-height: 46px; padding: 0.6rem 0.8rem; background: #0f172a; border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); text-decoration: none; font-weight: bold; text-align: center; transition: 0.2s; }
-.quick-filter:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
 .promo-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 9999; }
 .promo-modal-box { width: min(900px, 100%); max-height: 95vh; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--border); border-radius: 14px; padding: 1rem; box-sizing: border-box; }
-.promo-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.8rem; }
-.promo-modal-head h3 { margin: 0; color: var(--accent); }
-.promo-canvas-wrap { background: #0b1120; border-radius: 10px; padding: 0.75rem; border: 1px solid var(--border); }
 #promoCanvas { display: block; width: 100%; height: auto; border-radius: 8px; }
-.promo-modal-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-top: 0.8rem; }
-.cropper-view-box, .cropper-face { border-radius: 4px; }
 """
 
 JS = """
@@ -310,47 +243,33 @@ function toggleSpoiler(btn) {
     else {
         txt.style.display = "none"; btn.style.opacity = "1";
         if (btn.classList.contains('warning')) btn.innerText = "🔒 軽微なネタバレ【クリックして表示】";
-        else if (btn.classList.contains('danger')) btn.innerText = "⚠️ ネタバレあり【クリックして表示】";
+        else btn.innerText = "⚠️ ネタバレあり【クリックして表示】";
     }
 }
-function shareGameToX(title) { 
-    const text = encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n#OshiGe\\n`);
-    window.open(`https://x.com/intent/tweet?text=${text}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
-}
-function shareGameToLine(title) { 
-    const text = encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n#OshiGe\\n`);
-    window.open(`https://line.me/R/msg/text/?${text}${encodeURIComponent(window.location.href)}`, '_blank'); 
-}
-function sharePost(btn, platform) {
-    const gameId = btn.getAttribute('data-id');
-    const title = btn.getAttribute('data-title') || 'おすすめゲーム';
-    const catchphrase = btn.getAttribute('data-catch') || '';
-    const content = btn.getAttribute('data-content') || '';
-    const spoilerLevel = Number(btn.getAttribute('data-spoiler') || '0');
-    const url = window.location.origin + '/games/' + gameId;
+function shareGameToX(title) { window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n#OshiGe\\n`)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); }
+function shareGameToLine(title) { window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n#OshiGe\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); }
 
+function sharePost(btn, platform) {
+    const gameId = btn.dataset.id;
+    const title = btn.dataset.title;
+    const catchphrase = btn.dataset.catch;
+    const content = btn.dataset.content;
+    const spoilerLevel = Number(btn.dataset.spoiler || '0');
+    const url = window.location.origin + '/games/' + gameId;
     let text = `このゲーム、もっと知られてほしい。\\n\\n🎮 『${title}』`;
     if (catchphrase) text += `\\n\\n「${catchphrase}」`;
-
     if (spoilerLevel === 0 && content.trim()) {
         let impression = content.trim();
-        if (Array.from(impression).length > 20) {
-            impression = Array.from(impression).slice(0, 20).join('') + '…';
-        }
+        if (Array.from(impression).length > 20) impression = Array.from(impression).slice(0, 20).join('') + '…';
         text += `\\n\\n💬「${impression}」`;
-    } else if (spoilerLevel === 1) {
-        text += `\\n\\n🔒 軽微なネタバレを含みます`;
-    } else if (spoilerLevel === 2) {
-        text += `\\n\\n⚠️ ネタバレあり`;
-    }
+    } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
+    else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
     text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n#OshiGe`;
 
-    if (platform === 'x') {
-        window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
-    } else if (platform === 'line') {
-        window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
-    }
+    if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
+    else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
 }
+
 async function likePost(gId, pId, btn) {
     if (btn.classList.contains('liked')) return;
     try {
@@ -362,6 +281,7 @@ async function likePost(gId, pId, btn) {
         }
     } catch (e) {}
 }
+
 async function toggleBookmark(gId, btn) {
     try {
         const res = await fetch(`/games/${gId}/bookmark`, { method: 'POST' });
@@ -375,10 +295,7 @@ async function toggleBookmark(gId, btn) {
 
 function openReportModal(postId) {
     const modal = document.getElementById('report-modal');
-    if(modal) {
-        document.getElementById('report_post_id').value = postId;
-        modal.style.display = 'flex';
-    }
+    if(modal) { document.getElementById('report_post_id').value = postId; modal.style.display = 'flex'; }
 }
 function closeReportModal() {
     const modal = document.getElementById('report-modal');
@@ -395,9 +312,7 @@ async function submitReport(e) {
         await fetch(`/posts/${postId}/report`, { method: 'POST', body: formData });
         alert("通報を受信しました。サイトの治安維持にご協力いただきありがとうございます。");
         closeReportModal();
-    } catch(err) {
-        alert("通信エラーが発生しました。");
-    }
+    } catch(err) { alert("通信エラーが発生しました。"); }
 }
 
 function updatePlatform(f) { f.querySelector('.platform-hidden').value = Array.from(f.querySelectorAll('.platform-cb:checked')).map(cb => cb.value).join(','); }
@@ -420,12 +335,6 @@ function closeCropModal() {
 
 document.addEventListener("DOMContentLoaded", () => {
     document.querySelectorAll('.btn-like').forEach(b => { if (localStorage.getItem(`liked_${b.getAttribute('data-post-id')}`)) b.classList.add('liked'); });
-    document.querySelectorAll('.platform-hidden').forEach(h => {
-        if (!h.value) return;
-        const p = h.value.split(',').map(s => s.trim());
-        h.closest('form').querySelectorAll('.platform-cb').forEach(cb => { if (p.includes(cb.value)) cb.checked = true; });
-    });
-
     const imageUpload = document.getElementById('image_upload');
     if (imageUpload) {
         imageUpload.addEventListener('change', function(e) {
@@ -437,46 +346,30 @@ document.addEventListener("DOMContentLoaded", () => {
                 cropperImg.src = event.target.result;
                 document.getElementById('crop_modal').style.display = 'flex';
                 if (cropper) cropper.destroy();
-                cropper = new Cropper(cropperImg, {
-                    aspectRatio: 16 / 9,
-                    viewMode: 1,
-                    autoCropArea: 1,
-                    responsive: true,
-                    background: false
-                });
+                cropper = new Cropper(cropperImg, { aspectRatio: 16 / 9, viewMode: 1, autoCropArea: 1, responsive: true, background: false });
             };
             reader.readAsDataURL(file);
         });
     }
 });
 
-function isMobileDevice() { return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent); }
-
-function openPromoCard(title, catchphrase, targetAudience, playTime, username, genre, platform, spoilerLevel, content, imageUrl, oshiPoints) {
+// === 縦長SNS布教カードへのリニューアル ===
+function openPromoCard(btn) {
     const modal = document.getElementById('promo-card-modal');
     if (!modal) return;
     modal.style.display = 'flex';
-    modal.dataset.title = title || '';
-    modal.dataset.catchphrase = catchphrase || 'このゲーム、ぜひ遊んでほしい！';
-    modal.dataset.target = targetAudience || '';
-    modal.dataset.playTime = playTime || '';
-    modal.dataset.username = username || '名無しの布教者';
-    modal.dataset.genre = genre || '';
-    modal.dataset.platform = platform || '';
-    modal.dataset.spoiler = String(spoilerLevel || 0);
-    modal.dataset.content = content || '';
-    modal.dataset.imageUrl = imageUrl || ''; 
-    modal.dataset.oshiPoints = oshiPoints || '';
+    modal.dataset.title = btn.dataset.title || '';
+    modal.dataset.catchphrase = btn.dataset.catch || 'このゲーム、ぜひ遊んでほしい！';
+    modal.dataset.target = btn.dataset.target || '';
+    modal.dataset.playTime = btn.dataset.play || '';
+    modal.dataset.username = btn.dataset.user || '名無しの布教者';
+    modal.dataset.genre = btn.dataset.genre || '';
+    modal.dataset.platform = btn.dataset.platform || '';
+    modal.dataset.spoiler = String(btn.dataset.spoiler || '0');
+    modal.dataset.content = btn.dataset.content || '';
+    modal.dataset.imageUrl = btn.dataset.img || ''; 
+    modal.dataset.oshiPoints = btn.dataset.oshi || '';
     
-    const dlBtn = document.getElementById('promo-dl-btn');
-    const instruction = document.getElementById('promo-instruction');
-    if (isMobileDevice()) {
-        if(dlBtn) dlBtn.style.display = 'none';
-        if(instruction) instruction.innerHTML = '📱 <strong>スマホの方は、このカードをスクリーンショットで保存してください！</strong><br>SNSへの共有は各共有ボタンからどうぞ。';
-    } else {
-        if(dlBtn) dlBtn.style.display = 'inline-block';
-        if(instruction) instruction.innerHTML = 'このカードは「画像を保存」ボタンからダウンロードできます。SNSへの共有は各共有ボタンからどうぞ。';
-    }
     drawPromoCard();
 }
 function closePromoCard() {
@@ -510,13 +403,8 @@ function wrapCanvasText(ctx, text, x, y, maxWidth, lineHeight, maxLines) {
 
 function drawRoundRect(ctx, x, y, w, h, r) {
     const rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
+    ctx.beginPath(); ctx.moveTo(x + rr, y); ctx.arcTo(x + w, y, x + w, y + h, rr); ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr); ctx.arcTo(x, y, x + w, y, rr); ctx.closePath();
 }
 
 async function drawPromoCard() {
@@ -525,206 +413,144 @@ async function drawPromoCard() {
     if (!modal || !canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const W = 1200, H = 960; 
-    canvas.width = W;
-    canvas.height = H;
+    const W = 1080, H = 1350; 
+    canvas.width = W; canvas.height = H;
 
-    const title = modal.dataset.title || 'おすすめゲーム';
-    const catchphrase = modal.dataset.catchphrase || '';
-    const target = modal.dataset.target || '';
-    const playTime = modal.dataset.playTime || '';
-    const genre = modal.dataset.genre || '';
-    const platform = modal.dataset.platform || '';
-    const username = modal.dataset.username || '名無しの布教者';
-    const spoiler = Number(modal.dataset.spoiler || 0);
-    const imageUrl = modal.dataset.imageUrl || '';
-    const oshiPoints = modal.dataset.oshiPoints || '';
-    let contentRaw = modal.dataset.content || '';
+    const title = modal.dataset.title;
+    const catchphrase = modal.dataset.catchphrase;
+    const target = modal.dataset.target;
+    const playTime = modal.dataset.playTime;
+    const genre = modal.dataset.genre;
+    const platform = modal.dataset.platform;
+    const spoiler = Number(modal.dataset.spoiler);
+    const imageUrl = modal.dataset.imageUrl;
+    const oshiPoints = modal.dataset.oshiPoints;
+    let contentRaw = modal.dataset.content;
 
-    if (spoiler > 0) contentRaw = '';
+    if (spoiler > 0) contentRaw = '（※詳細な感想は、ネタバレ防止のためサイト上で確認してください）';
 
-    const bg = ctx.createLinearGradient(0, 0, W, H);
-    bg.addColorStop(0, '#111827');
-    bg.addColorStop(0.55, '#0f172a');
-    bg.addColorStop(1, '#020617');
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, W, H);
+    // 1. 背景の描画
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
 
     if (imageUrl) {
         try {
             const img = new Image();
             img.crossOrigin = 'Anonymous'; 
             img.src = '/proxy-image?url=' + encodeURIComponent(imageUrl);
-            
             await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
-            const imgRatio = img.width / img.height;
-            const targetRatio = W / 550;
-            let drawW, drawH, drawX, drawY;
             
+            const imgRatio = img.width / img.height;
+            const targetRatio = W / 900;
+            let drawW, drawH, drawX, drawY;
             if (imgRatio > targetRatio) {
-                drawH = 550; drawW = img.width * (550 / img.height);
+                drawH = 900; drawW = img.width * (900 / img.height);
                 drawX = (W - drawW) / 2; drawY = 0;
             } else {
                 drawW = W; drawH = img.height * (W / img.width);
-                drawX = 0; drawY = (550 - drawH) / 2;
+                drawX = 0; drawY = (900 - drawH) / 2;
             }
-            
             ctx.save();
-            ctx.globalAlpha = 0.5;
-            ctx.beginPath();
-            ctx.rect(0, 0, W, 550);
-            ctx.clip();
+            ctx.beginPath(); ctx.rect(0, 0, W, 900); ctx.clip();
             ctx.drawImage(img, drawX, drawY, drawW, drawH);
             ctx.restore();
             
-            const fade = ctx.createLinearGradient(0, 0, 0, 550);
-            fade.addColorStop(0, 'rgba(15, 23, 42, 0)');
-            fade.addColorStop(0.6, 'rgba(15, 23, 42, 0.6)');
-            fade.addColorStop(1, '#0f172a');
-            ctx.fillStyle = fade;
-            ctx.fillRect(0, 0, W, 550);
-        } catch(e) { drawFallbackGlow(ctx); }
-    } else { drawFallbackGlow(ctx); }
-
-    function drawFallbackGlow(ctx) {
-        const glow = ctx.createRadialGradient(1030, 100, 20, 1030, 100, 430);
-        glow.addColorStop(0, 'rgba(245,158,11,0.22)');
-        glow.addColorStop(1, 'rgba(245,158,11,0)');
-        ctx.fillStyle = glow;
-        ctx.fillRect(650, 0, 550, 500);
+            // 下部の暗転グラデーション
+            const fade = ctx.createLinearGradient(0, 200, 0, 900);
+            fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(0.5, 'rgba(2, 6, 23, 0.7)'); fade.addColorStop(1, '#020617');
+            ctx.fillStyle = fade; ctx.fillRect(0, 0, W, 900);
+        } catch(e) {}
+    } else {
+        const glow = ctx.createRadialGradient(W/2, 300, 50, W/2, 300, 600);
+        glow.addColorStop(0, 'rgba(245,158,11,0.2)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
+        ctx.fillStyle = glow; ctx.fillRect(0, 0, W, 900);
     }
 
-    ctx.fillStyle = '#f59e0b';
-    ctx.fillRect(0, 0, 14, H);
-    ctx.font = '900 28px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    ctx.fillText('OSHI-GE', 58, 62);
-    ctx.fillStyle = '#cbd5e1';
-    ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    ctx.fillText('GAME RECOMMENDATION CARD', 58, 91);
+    // 2. Oshi-Geロゴ
+    ctx.fillStyle = '#f59e0b'; ctx.fillRect(0, 40, 12, 50);
+    ctx.font = '900 36px "Noto Sans JP", sans-serif'; ctx.fillText('OSHI-GE', 40, 78);
 
+    // 3. ネタバレバッジ
+    let badgeText = '🟢 ネタバレなし'; let badgeColor = '#10b981'; let badgeBg = 'rgba(16, 185, 129, 0.2)';
+    if (spoiler === 1) { badgeText = '🟡 軽微なネタバレあり'; badgeColor = '#f59e0b'; badgeBg = 'rgba(245, 158, 11, 0.2)'; }
+    if (spoiler === 2) { badgeText = '🔴 ネタバレあり'; badgeColor = '#ef4444'; badgeBg = 'rgba(239, 68, 68, 0.2)'; }
+    ctx.font = '900 24px "Noto Sans JP", sans-serif';
+    const bw = ctx.measureText(badgeText).width + 40;
+    drawRoundRect(ctx, W - bw - 40, 40, bw, 50, 25);
+    ctx.fillStyle = badgeBg; ctx.fill();
+    ctx.strokeStyle = badgeColor; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = badgeColor; ctx.fillText(badgeText, W - bw - 20, 73);
+
+    // 4. キャッチコピー（主役）
     ctx.fillStyle = '#ffffff';
-    ctx.font = '900 58px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.8)';
-    ctx.shadowBlur = 10;
-    const titleLines = wrapCanvasText(ctx, title, 58, 158, 1080, 70, 2);
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 20;
+    ctx.font = '900 65px "Noto Sans JP", sans-serif';
+    const catchLines = wrapCanvasText(ctx, catchphrase, 50, 300, 980, 85, 3);
     ctx.shadowBlur = 0;
 
-    const quoteY = 305 + Math.max(0, titleLines - 1) * 20;
-    drawRoundRect(ctx, 58, quoteY, 1084, 158, 18);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(245,158,11,0.65)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    // 5. 下部の情報パネル
+    let panelY = 300 + (catchLines * 85) + 40;
+    if(panelY < 600) panelY = 600;
+    
+    drawRoundRect(ctx, 40, panelY, 1000, H - panelY - 90, 20);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
 
-    ctx.fillStyle = '#f59e0b';
-    ctx.font = '900 20px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    ctx.fillText('このゲームを一言で言うと', 88, quoteY + 38);
+    let currentY = panelY + 70;
+    ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
+    const titleLines = wrapCanvasText(ctx, title, 80, currentY, 920, 55, 2);
+    currentY += titleLines * 55 + 30;
 
-    ctx.fillStyle = '#fff7ed';
-    ctx.font = '900 34px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    wrapCanvasText(ctx, '「' + catchphrase + '」', 88, quoteY + 84, 1015, 46, 2);
-
-    let y = quoteY + 200;
-
-    const cleanContent = contentRaw.replace(/\s+/g, ' ').trim();
-    if (cleanContent.length >= 15) {
-        ctx.fillStyle = '#cbd5e1';
-        ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-        ctx.fillText('💬 布教者の声', 60, y);
-        y += 28;
-
-        ctx.fillStyle = '#f8fafc';
-        ctx.font = '400 24px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-        const linesDrawn = wrapCanvasText(ctx, cleanContent, 60, y + 6, 1080, 36, 3);
-        y += (linesDrawn * 36) + 36;
-    } else { y += 10; }
+    if (contentRaw) {
+        ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
+        const contentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, currentY, 920, 45, 4);
+        currentY += contentLines * 45 + 40;
+    }
 
     if (target) {
-        ctx.fillStyle = '#94a3b8';
-        ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-        ctx.fillText('おすすめ対象', 60, y);
-        y += 30;
-
-        drawRoundRect(ctx, 58, y, 1084, 52, 10);
-        ctx.fillStyle = '#1e293b';
-        ctx.fill();
-        ctx.strokeStyle = '#334155';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        ctx.fillStyle = '#f8fafc';
-        ctx.font = '700 22px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-        wrapCanvasText(ctx, target, 78, y + 34, 1040, 28, 1);
-        y += 82;
+        ctx.fillStyle = '#94a3b8'; ctx.font = '700 22px "Noto Sans JP", sans-serif';
+        ctx.fillText('👤 こんな人におすすめ', 80, currentY);
+        currentY += 35;
+        ctx.fillStyle = '#f8fafc'; ctx.font = '900 28px "Noto Sans JP", sans-serif';
+        wrapCanvasText(ctx, target, 100, currentY, 880, 35, 1);
+        currentY += 60;
     }
 
-    const chips = [];
-    if (playTime) chips.push('PLAY ' + playTime);
-    if (genre) chips.push(genre);
-    if (platform) chips.push(platform);
-    if (oshiPoints) oshiPoints.split(',').filter(Boolean).slice(0, 2).forEach(p => chips.push(p));
+    // タグ表示
+    const tags = [];
+    if(playTime) tags.push(playTime);
+    if(genre) tags.push(genre);
+    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
+    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
 
-    if (chips.length) {
-        let x = 58;
-        ctx.font = '700 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-
-        for (const chip of chips) {
-            const width = Math.min(340, Math.max(105, ctx.measureText(chip).width + 38));
-            if (x + width > 1142) { x = 58; y += 66; }
-
-            drawRoundRect(ctx, x, y, width, 48, 24);
-            ctx.fillStyle = '#172033';
-            ctx.fill();
-            ctx.strokeStyle = '#475569';
-            ctx.lineWidth = 1;
-            ctx.stroke();
-            ctx.fillStyle = '#cbd5e1';
-            ctx.fillText(chip, x + 19, y + 31);
-            x += width + 12;
+    if(tags.length) {
+        let tx = 80;
+        ctx.font = '700 22px "Noto Sans JP", sans-serif';
+        for(let i=0; i<Math.min(tags.length, 6); i++) {
+            const tagStr = '#' + tags[i];
+            const tw = ctx.measureText(tagStr).width + 30;
+            if(tx + tw > 1000) break;
+            drawRoundRect(ctx, tx, currentY, tw, 42, 21);
+            ctx.fillStyle = 'rgba(245, 158, 11, 0.15)'; ctx.fill();
+            ctx.fillStyle = '#fcd34d'; ctx.fillText(tagStr, tx + 15, currentY + 30);
+            tx += tw + 15;
         }
-        y += 72;
     }
 
-    if (spoiler > 0) {
-        const spoilerText = spoiler === 2 ? 'WARNING  ネタバレあり' : 'CAUTION  軽微なネタバレあり';
-        ctx.font = '900 18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-        const sw = ctx.measureText(spoilerText).width + 36;
-        drawRoundRect(ctx, 58, Math.min(y, H - 150), sw, 44, 22);
-        ctx.fillStyle = spoiler === 2 ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)';
-        ctx.fill();
-        ctx.strokeStyle = spoiler === 2 ? 'rgba(239,68,68,0.65)' : 'rgba(245,158,11,0.65)';
-        ctx.stroke();
-        ctx.fillStyle = spoiler === 2 ? '#fca5a5' : '#fde68a';
-        ctx.fillText(spoilerText, 76, Math.min(y, H - 150) + 29);
-        y += 72;
-    }
-
-    const footerY = Math.max(y + 20, H - 90);
-    ctx.strokeStyle = '#334155';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(58, footerY);
-    ctx.lineTo(1142, footerY);
-    ctx.stroke();
-
-    ctx.fillStyle = '#64748b';
-    ctx.font = '18px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    ctx.fillText('布教者：' + username, 58, footerY + 36);
-
-    ctx.fillStyle = '#f59e0b';
-    ctx.font = '900 20px "Noto Sans JP", "Yu Gothic", Arial, sans-serif';
-    const brand = 'Oshi-Ge';
-    ctx.fillText(brand, 1142 - ctx.measureText(brand).width, footerY + 36);
+    // 6. フッター
+    ctx.fillStyle = '#64748b'; ctx.font = '22px "Noto Sans JP", sans-serif';
+    ctx.fillText('あなたも、このゲームを布教しよう。', 50, H - 35);
+    ctx.fillStyle = '#f59e0b'; ctx.font = '900 26px "Noto Sans JP", sans-serif';
+    ctx.fillText('Oshi-Ge', 960, H - 35);
 }
 
 function downloadPromoCard() {
     const canvas = document.getElementById('promoCanvas');
     if (!canvas) return;
     const title = document.getElementById('promo-card-modal').dataset.title || 'oshi-ge';
-    const safeName = title.replace(/[\\\\/:*?"<>|]/g, '_');
     const a = document.createElement('a');
-    a.download = `Oshi-Ge_${safeName}.png`;
+    a.download = `Oshi-Ge_${title.replace(/[\\\\/:*?"<>|]/g, '_')}.png`;
     a.href = canvas.toDataURL('image/png');
     a.click();
 }
@@ -759,7 +585,6 @@ BASE_HTML = """
     </script>
     
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6608111802250449" crossorigin="anonymous"></script>
-    
     <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 
@@ -832,7 +657,6 @@ BASE_HTML = """
             </form>
         </div>
     </div>
-
     <script>{{ js }}</script>
 </body>
 </html>
@@ -1015,7 +839,22 @@ GAME_HTML = """
             <div style="display: flex; gap: 0.5rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                <button type="button" class="btn btn-outline btn-small" onclick='openPromoCard({{ game.title|tojson }}, {{ post.catchphrase|default("")|tojson }}, {{ post.target_audience|default("")|tojson }}, {{ post.play_time|default("")|tojson }}, {{ post.username|default("名無しの布教者")|tojson }}, {{ game.genre|default("")|tojson }}, {{ game.platform|default("")|tojson }}, {{ post.spoiler_level|default(0) }}, {{ post.content|default("")|tojson }}, {{ game.image_url|default("")|tojson }}, {{ post.oshi_points|default("")|tojson }})'>🎴 布教カード</button>
+                
+                <button type="button" class="btn btn-outline btn-small" 
+                    data-id="{{ game.id }}"
+                    data-title="{{ game.title | default('') | escape }}" 
+                    data-catch="{{ post.catchphrase | default('') | escape }}" 
+                    data-target="{{ post.target_audience | default('') | escape }}" 
+                    data-play="{{ post.play_time | default('') | escape }}" 
+                    data-user="{{ post.username | default('名無しの布教者') | escape }}" 
+                    data-genre="{{ game.genre | default('') | escape }}" 
+                    data-platform="{{ game.platform | default('') | escape }}" 
+                    data-spoiler="{{ post.spoiler_level | default(0) }}" 
+                    data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
+                    data-img="{{ game.image_url | default('') | escape }}" 
+                    data-oshi="{{ post.oshi_points | default('') | escape }}" 
+                    onclick="openPromoCard(this)">🎴 布教カード</button>
+
                 <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
             </div>
             <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
@@ -1067,6 +906,21 @@ MYPAGE_HTML = """
             <div style="display: flex; gap: 0.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem;">
                 <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
+                
+                <button type="button" class="btn btn-outline btn-small" 
+                    data-id="{{ post.game_id }}"
+                    data-title="{{ post.game_title | default('') | escape }}" 
+                    data-catch="{{ post.catchphrase | default('') | escape }}" 
+                    data-target="{{ post.target_audience | default('') | escape }}" 
+                    data-play="{{ post.play_time | default('') | escape }}" 
+                    data-user="{{ post.username | default('名無しの布教者') | escape }}" 
+                    data-genre="{{ post.game_genre | default('') | escape }}" 
+                    data-platform="{{ post.game_platform | default('') | escape }}" 
+                    data-spoiler="{{ post.spoiler_level | default(0) }}" 
+                    data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
+                    data-img="{{ post.game_image_url | default('') | escape }}" 
+                    data-oshi="{{ post.oshi_points | default('') | escape }}" 
+                    onclick="openPromoCard(this)">🎴 布教カード</button>
             </div>
         </div>
         {% else %}
@@ -1274,7 +1128,6 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     game_title_tag = f"{game['title']} の評価・感想・ネタバレなし布教 - Oshi-Ge"
     og_desc = game['description'] if game['description'] else f"『{game['title']}』のおすすめ布教ページです。ネタバレなしで魅力をお伝えします。"
     
-    # 動的OGPのURLを設定
     host = request.headers.get("host", "")
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     base_url = f"{scheme}://{host}" if host else ""
@@ -1350,7 +1203,7 @@ async def mypage(request: Request):
     
     with get_db_connection() as conn:
         if my_posts_ids:
-            my_posts_list = conn.execute("SELECT p.*, g.title as game_title FROM posts p JOIN games g ON p.game_id = g.id WHERE p.id = ANY(%s) ORDER BY p.created_at DESC", (my_posts_ids,)).fetchall()
+            my_posts_list = conn.execute("SELECT p.*, g.title as game_title, g.image_url as game_image_url, g.genre as game_genre, g.platform as game_platform FROM posts p JOIN games g ON p.game_id = g.id WHERE p.id = ANY(%s) ORDER BY p.created_at DESC", (my_posts_ids,)).fetchall()
         if bookmarks:
             bookmarked_games = conn.execute("SELECT * FROM games WHERE id = ANY(%s) ORDER BY created_at DESC", (bookmarks,)).fetchall()
             
