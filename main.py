@@ -184,7 +184,6 @@ async def generate_ogp(game_id: int):
     img.save(img_byte_arr, format='PNG')
     return Response(content=img_byte_arr.getvalue(), media_type="image/png")
 
-
 # --- 2. HTML・CSS・JSテンプレート ---
 CSS = """
 :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
@@ -257,6 +256,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
 .btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
 
+/* 検索ボタンのハイライトとデザイン */
 .discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
 .discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
 .quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
@@ -315,7 +315,7 @@ function sharePost(btn, platform) {
         if (Array.from(impression).length > 20) impression = Array.from(impression).slice(0, 20).join('') + '…';
         text += `\\n\\n💬「${impression}」`;
     } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
-    else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
+    else if (spoilerLevel === 2) text += `\\n\\n⚠️️ ネタバレあり`;
     text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n#OshiGe`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
@@ -479,8 +479,7 @@ async function drawPromoCard() {
     if (!modal || !canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const W = 1080, H = 1350; 
-    canvas.width = W; canvas.height = H;
+    const W = 1080; 
 
     const title = modal.dataset.title;
     const catchphrase = modal.dataset.catchphrase;
@@ -495,31 +494,85 @@ async function drawPromoCard() {
 
     if (spoiler > 0) contentRaw = '（※詳細な感想は、ネタバレ防止のためサイト上で確認してください）';
 
+    // 行数計算ヘルパー
+    function getLines(text, maxWidth, font, maxLines) {
+        if(!text) return 0;
+        ctx.font = font;
+        const chars = Array.from(text);
+        let line = ''; let lines = 0;
+        for (const ch of chars) {
+            if (ctx.measureText(line + ch).width > maxWidth && line) {
+                lines++; line = ch;
+                if(maxLines && lines >= maxLines) return maxLines;
+            } else { line += ch; }
+        }
+        if (line) lines++;
+        return maxLines ? Math.min(lines, maxLines) : lines;
+    }
+
+    // 1. 画像のロードを先に行う
+    let img = null;
+    let drawH = 607;
+    if (imageUrl) {
+        try {
+            img = new Image();
+            img.crossOrigin = 'Anonymous'; 
+            img.src = '/proxy-image?url=' + encodeURIComponent(imageUrl);
+            await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+            drawH = img.height * (W / img.width);
+        } catch(e) {}
+    }
+
+    // 2. Y座標のシミュレーションと Canvasサイズの決定（可変対応）
+    let catchY = 650;
+    if (drawH > 600 && drawH < 800) { catchY = drawH + 40; }
+    else if (drawH >= 800) { catchY = 840; }
+
+    const catchLines = getLines(catchphrase, 980, '900 65px "Noto Sans JP", sans-serif', 3);
+    let panelY = catchY + (catchLines * 85) + 30;
+    if(panelY < 600) panelY = 600;
+
+    let simY = panelY + 70;
+    const titleLines = getLines(title, 920, '900 45px "Noto Sans JP", sans-serif', 2);
+    simY += titleLines * 55 + 30;
+
+    if (contentRaw) {
+        const contentLines = getLines('「' + contentRaw.trim() + '」', 920, '400 30px "Noto Sans JP", sans-serif', 4);
+        simY += contentLines * 45 + 40;
+    }
+
+    if (target) {
+        simY += 35 + 35 + 60;
+    }
+
+    const tags = [];
+    if(playTime) tags.push(playTime);
+    if(genre) tags.push(genre);
+    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
+    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
+    if(tags.length) { simY += 42 + 40; }
+
+    const panelH = simY - panelY + 20;
+    const H = Math.max(1350, panelY + panelH + 100);
+    
+    // Canvasサイズ確定
+    canvas.width = W; canvas.height = H;
+
+    // 3. 実際の描画
     const bg = ctx.createLinearGradient(0, 0, 0, H);
     bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
     ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
 
-    let drawH = 607; 
-    if (imageUrl) {
-        try {
-            const img = new Image();
-            img.crossOrigin = 'Anonymous'; 
-            img.src = '/proxy-image?url=' + encodeURIComponent(imageUrl);
-            await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
-            
-            drawH = img.height * (W / img.width);
-            ctx.drawImage(img, 0, 0, W, drawH);
-            
-            const fadeStart = Math.max(0, drawH - 250);
-            const fade = ctx.createLinearGradient(0, fadeStart, 0, drawH);
-            fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(1, '#020617');
-            ctx.fillStyle = fade; ctx.fillRect(0, fadeStart, W, drawH - fadeStart);
-            
-            if (drawH < H) {
-                ctx.fillStyle = '#020617';
-                ctx.fillRect(0, drawH, W, H - drawH);
-            }
-        } catch(e) {}
+    if (img) {
+        ctx.drawImage(img, 0, 0, W, drawH);
+        const fadeStart = Math.max(0, drawH - 250);
+        const fade = ctx.createLinearGradient(0, fadeStart, 0, drawH);
+        fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(1, '#020617');
+        ctx.fillStyle = fade; ctx.fillRect(0, fadeStart, W, drawH - fadeStart);
+        if (drawH < H) {
+            ctx.fillStyle = '#020617';
+            ctx.fillRect(0, drawH, W, H - drawH);
+        }
     } else {
         const glow = ctx.createRadialGradient(W/2, 300, 50, W/2, 300, 600);
         glow.addColorStop(0, 'rgba(245,158,11,0.2)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
@@ -539,31 +592,25 @@ async function drawPromoCard() {
     ctx.strokeStyle = badgeColor; ctx.lineWidth = 2; ctx.stroke();
     ctx.fillStyle = badgeColor; ctx.fillText(badgeText, W - bw - 20, 73);
 
-    let catchY = 650;
-    if (drawH > 600 && drawH < 800) { catchY = drawH + 40; }
-    
     ctx.fillStyle = '#ffffff';
     ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 15;
     ctx.font = '900 65px "Noto Sans JP", sans-serif';
-    const catchLines = wrapCanvasText(ctx, catchphrase, 50, catchY, 980, 85, 3);
+    wrapCanvasText(ctx, catchphrase, 50, catchY, 980, 85, 3);
     ctx.shadowBlur = 0;
 
-    let panelY = catchY + (catchLines * 85) + 30;
-    if(panelY < 600) panelY = 600;
-    
-    drawRoundRect(ctx, 40, panelY, 1000, H - panelY - 90, 20);
+    drawRoundRect(ctx, 40, panelY, 1000, panelH, 20);
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
     ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
 
     let currentY = panelY + 70;
     ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
-    const titleLines = wrapCanvasText(ctx, title, 80, currentY, 920, 55, 2);
-    currentY += titleLines * 55 + 30;
+    const drawnTitleLines = wrapCanvasText(ctx, title, 80, currentY, 920, 55, 2);
+    currentY += drawnTitleLines * 55 + 30;
 
     if (contentRaw) {
         ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
-        const contentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, currentY, 920, 45, 4);
-        currentY += contentLines * 45 + 40;
+        const drawnContentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, currentY, 920, 45, 4);
+        currentY += drawnContentLines * 45 + 40;
     }
 
     if (target) {
@@ -574,12 +621,6 @@ async function drawPromoCard() {
         wrapCanvasText(ctx, target, 100, currentY, 880, 35, 1);
         currentY += 60;
     }
-
-    const tags = [];
-    if(playTime) tags.push(playTime);
-    if(genre) tags.push(genre);
-    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
-    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
 
     if(tags.length) {
         let tx = 80;
@@ -921,7 +962,7 @@ GAME_HTML = """
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𝕏 で共有</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">𕏿 で共有</button>
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                 
                 <button type="button" class="btn btn-outline btn-small" 
