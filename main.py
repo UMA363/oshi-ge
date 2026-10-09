@@ -864,7 +864,6 @@ INDEX_HTML = """
         <a class="quick-filter {% if q == 'ホラー' %}active{% endif %}" href="/?q=ホラー">😱 ホラー</a>
         <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
         <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
-        <!-- ▼ 改善3：ガチャボタンの強化 -->
         <a class="quick-filter" href="/games/random" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
     </div>
 </div>
@@ -899,7 +898,23 @@ INDEX_HTML = """
         </div>
     </div>
     <div class="sidebar-column">
-        <!-- ▼ 改善2：布教リクエスト機能 -->
+        <!-- ▼ 改善2：新着・直近の布教ピックアップ（回遊強化） -->
+        <div class="card" style="border-color: var(--accent); padding: 1.2rem; background: rgba(245, 158, 11, 0.03);">
+            <h3 style="margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; font-size: 1.1rem;">💬 新着の熱い布教</h3>
+            <div style="display: flex; flex-direction: column; gap: 0.8rem; margin-top: 1rem;">
+                {% for p in recent_posts %}
+                <div style="background: #0f172a; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border); cursor: pointer;" onclick="location.href='/games/{{ p.game_id }}'">
+                    <div style="font-size: 0.8rem; color: var(--accent); font-weight: bold; margin-bottom: 0.2rem;">🎮 {{ p.game_title }}</div>
+                    <div style="font-size: 0.85rem; color: #f1f5f9; font-weight: bold; margin-bottom: 0.3rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">「{{ p.catchphrase }}」</div>
+                    <div style="font-size: 0.75rem; color: var(--text-sub); text-align: right;">by {{ p.username }}</div>
+                </div>
+                {% else %}
+                <div style="color: var(--text-sub); font-size: 0.85rem; text-align: center;">まだ布教はありません。</div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- 布教リクエスト機能 -->
         <div class="card" style="border-color: #3b82f6; padding: 1.2rem; background: rgba(59, 130, 246, 0.05);">
             <h3 style="margin-top: 0; color: #3b82f6; border-bottom: 1px solid rgba(59, 130, 246, 0.3); padding-bottom: 0.5rem;">🙋 誰か布教して！</h3>
             <p style="font-size: 0.85rem; color: var(--text-sub); margin-bottom: 1rem;">気になっているゲームのプレゼンを誰かにリクエストしよう。</p>
@@ -915,7 +930,6 @@ INDEX_HTML = """
                 <div style="background: #0f172a; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
                     <div style="font-weight: bold; color: var(--text-main); font-size: 0.95rem;">{{ req.title }}</div>
                     <div style="font-size: 0.75rem; color: var(--text-sub); margin-top: 0.3rem;">👤 リクエスター: {{ req.username }}</div>
-                    <!-- ▼ ここをクリックするとタイトルが入った状態で投稿画面へ -->
                     <a href="/games/new?title={{ req.title | urlencode }}" style="display: inline-block; margin-top: 0.6rem; font-size: 0.85rem; color: #f59e0b; text-decoration: none; font-weight: bold; padding: 0.3rem 0.6rem; background: rgba(245, 158, 11, 0.1); border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.3);">👉 このゲームを布教する</a>
                 </div>
                 {% else %}
@@ -982,6 +996,18 @@ GAME_HTML = """
         🔥 このゲームを布教する（クリックして投稿フォームを開く）
     </summary>
     <form action="/games/{{ game.id }}/posts" method="post" style="margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
+        
+        <!-- ▼ 改善1：投稿フォームへの「布教のヒント」表示 -->
+        <div style="background: rgba(245, 158, 11, 0.08); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; color: #cbd5e1;">
+            <div style="font-weight: bold; color: var(--accent); margin-bottom: 0.4rem;">💡 布教のヒント（こんなことを書くと魅力が伝わります！）</div>
+            <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-sub);">
+                <li>どんなところが面白い？（バトル、世界観、キャラなど）</li>
+                <li>どんな人におすすめ？</li>
+                <li>遊んだあと、どんな気持ちになった？</li>
+            </ul>
+            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！</div>
+        </div>
+
         <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
         <div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
             <div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" required placeholder="例：最後まで遊んだときに、やってよかったと思える作品" style="border-color: rgba(245, 158, 11, 0.5);"></div>
@@ -1185,6 +1211,18 @@ NEW_GAME_HTML = """
         <div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ description | default('') }}</textarea></div>
 
         <h3 style="margin-top: 2rem; color: var(--accent); border-top: 1px dashed var(--border); padding-top: 1.5rem;">🔥 最初の布教コメント</h3>
+        
+        <!-- ▼ 改善1：新規追加フォームへの「布教のヒント」表示 -->
+        <div style="background: rgba(245, 158, 11, 0.08); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; color: #cbd5e1;">
+            <div style="font-weight: bold; color: var(--accent); margin-bottom: 0.4rem;">💡 布教のヒント（こんなことを書くと魅力が伝わります！）</div>
+            <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-sub);">
+                <li>どんなところが面白い？（バトル、世界観、キャラなど）</li>
+                <li>どんな人におすすめ？</li>
+                <li>遊んだあと、どんな気持ちになった？</li>
+            </ul>
+            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！</div>
+        </div>
+
         <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
         <div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
             <div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" required placeholder="例：最後まで遊んだときに、やってよかったと思える作品" style="border-color: rgba(245, 158, 11, 0.5);"></div>
@@ -1272,8 +1310,10 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
         games = conn.execute(query + f" ORDER BY {order_clause}", params).fetchall()
         weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
         requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
+        # ▼ 改善2用の新着布教リストを取得
+        recent_posts = conn.execute('''SELECT p.catchphrase, p.username, g.title as game_title, g.id as game_id FROM posts p JOIN games g ON p.game_id = g.id ORDER BY p.created_at DESC LIMIT 3''').fetchall()
         
-    return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
+    return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests, recent_posts=recent_posts)
 
 @app.get("/games/random")
 async def random_game():
