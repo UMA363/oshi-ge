@@ -421,8 +421,60 @@ function closeCropModal() {
     document.getElementById('image_upload').value = ""; 
 }
 
-// 投稿完了の自動表示処理とイベントリスナー
+// ▼ 神ゲー発掘ガチャの演出アニメーション制御
+let allGamesList = [];
+async function initGachaData() {
+    try {
+        const res = await fetch('/api/games-list');
+        if (res.ok) { allGamesList = await res.json(); }
+    } catch(e) {}
+}
+
+async function startGacha(event) {
+    event.preventDefault();
+    if (allGamesList.length === 0) {
+        await initGachaData();
+    }
+    if (allGamesList.length === 0) {
+        alert("現在登録されているゲームがありません！");
+        return;
+    }
+
+    const modal = document.getElementById('gacha-modal');
+    const titleEl = document.getElementById('gacha-title-display');
+    const btnEl = document.getElementById('gacha-action-btn');
+    if (!modal) return;
+
+    modal.style.display = 'flex';
+    btnEl.style.display = 'none';
+    titleEl.innerText = "🎲 ガチャ回転中...";
+
+    // 演出用スロット回転（約2秒間シャッフル）
+    let count = 0;
+    const maxCount = 20;
+    const interval = setInterval(() => {
+        const randomGame = allGamesList[Math.floor(Math.random() * allGamesList.length)];
+        titleEl.innerText = randomGame.title;
+        count++;
+        if (count >= maxCount) {
+            clearInterval(interval);
+            // 最終決定
+            const selectedGame = allGamesList[Math.floor(Math.random() * allGamesList.length)];
+            titleEl.innerHTML = `🎉 神ゲー発掘！<br><span style="color: var(--accent); font-size: 1.8rem;">『${selectedGame.title}』</span>`;
+            btnEl.innerText = "✨ このゲームを見に行く";
+            btnEl.onclick = () => { location.href = `/games/${selectedGame.id}`; };
+            btnEl.style.display = 'inline-block';
+        }
+    }, 100);
+}
+
+function closeGachaModal() {
+    const modal = document.getElementById('gacha-modal');
+    if (modal) modal.style.display = 'none';
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+    initGachaData();
     document.querySelectorAll('.btn-like').forEach(b => { if (localStorage.getItem(`liked_${b.getAttribute('data-post-id')}`)) b.classList.add('liked'); });
     const imageUpload = document.getElementById('image_upload');
     if (imageUpload) {
@@ -441,7 +493,6 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
-    // 投稿完了のサクセス演出
     const urlParams = new URLSearchParams(window.location.search);
     const postedId = urlParams.get('posted');
     if (postedId) {
@@ -785,6 +836,20 @@ BASE_HTML = """
     {% endif %}
     <main>{{ content }}</main>
 
+    <!-- ▼ ガチャ演出用モーダル -->
+    <div id="gacha-modal" class="promo-modal" style="display:none; z-index: 10000;" onclick="if(event.target===this) closeGachaModal();">
+        <div class="promo-modal-box" style="width: min(500px, 100%); background: radial-gradient(circle, #1e293b 0%, #0f172a 100%); border: 2px solid var(--accent); text-align: center; padding: 2.5rem 1.5rem;">
+            <h3 style="color: var(--accent); font-size: 1.5rem; margin-bottom: 1.5rem;">🎰 神ゲー発掘ガチャ</h3>
+            <div style="background: #0b1120; border: 2px solid #334155; border-radius: 12px; padding: 2rem; margin-bottom: 2rem; min-height: 100px; display: flex; align-items: center; justify-content: center;">
+                <div id="gacha-title-display" style="font-size: 1.4rem; font-weight: bold; color: #fff;">抽選中...</div>
+            </div>
+            <div>
+                <button type="button" id="gacha-action-btn" class="btn btn-primary" style="display:none; font-size: 1.1rem; padding: 0.8rem 2rem; background: var(--accent);">✨ このゲームを見に行く</button>
+                <button type="button" class="btn btn-outline" onclick="closeGachaModal()" style="margin-left: 0.5rem; color: #94a3b8; border-color: #475569;">✕ 閉じる</button>
+            </div>
+        </div>
+    </div>
+
     <div id="crop_modal" class="promo-modal" style="display:none; z-index: 10000;">
         <div class="promo-modal-box" style="width: min(600px, 100%); background: var(--bg-color);">
             <div class="promo-modal-head">
@@ -864,7 +929,8 @@ INDEX_HTML = """
         <a class="quick-filter {% if q == 'ホラー' %}active{% endif %}" href="/?q=ホラー">😱 ホラー</a>
         <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
         <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
-        <a class="quick-filter" href="/games/random" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
+        <!-- ▼ ガチャボタンをクリックすると演出モーダルが起動 -->
+        <a class="quick-filter" href="#" onclick="startGacha(event)" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
     </div>
 </div>
 
@@ -1254,6 +1320,13 @@ def render_page(content_template_str, is_top=False, page_title=None, og_descript
         css=CSS, js=JS, content=content_html, is_top=is_top, 
         page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema, **kwargs
     ))
+
+# ▼ ガチャ用のゲーム一覧データを返すAPIエンドポイントを追加
+@app.get("/api/games-list")
+async def api_games_list():
+    with get_db_connection() as conn:
+        games = conn.execute("SELECT id, title FROM games").fetchall()
+    return games
 
 @app.get("/")
 async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
