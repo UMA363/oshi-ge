@@ -741,6 +741,8 @@ async function drawPromoCard() {
     }
 }
 
+Base64 = null;  // placeholder to prevent unused errors if any
+
 function downloadPromoCard() {
     const canvas = document.getElementById('promoCanvas');
     if (!canvas) return;
@@ -764,13 +766,11 @@ BASE_HTML = """
     <meta property="og:type" content="website">
     <meta property="og:title" content="{{ page_title | default('Oshi-Ge | ネタバレなしゲーム布教サイト') }}">
     <meta property="og:description" content="{{ og_description | default('未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。') }}">
-    <!-- ▼ トップページや共通ページでもOGP画像（ブランドロゴ等）が表示されるように修正 -->
-    <meta property="og:image" content="{{ og_image | default(request.url.scheme ~ '://' ~ request.headers.host ~ '/robots.txt') | replace('/robots.txt', '') }}/static-ogp.png">
     {% if og_image %}
     <meta property="og:image" content="{{ og_image }}">
     <meta name="twitter:card" content="summary_large_image">
     {% else %}
-    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:card" content="summary">
     {% endif %}
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
     
@@ -1307,13 +1307,13 @@ NEW_GAME_HTML = """
 EDIT_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲーム情報を編集する</h2><form action="/games/{{ game.id }}/edit" method="post" enctype="multipart/form-data"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ game.title }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if game.genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ game.platform | default('') }}"></div><div class="form-group"><label>ゲーム画像（新しくアップロードして変更する場合のみ選択）:</label><input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;"><input type="hidden" name="image_base64" id="image_base64"><input type="hidden" name="existing_image_url" value="{{ game.image_url | default('') }}"><div id="image_preview" style="margin-top: 1rem; display: {% if game.image_url %}block{% else %}none{% endif %};"><img id="preview_img" src="{{ game.image_url | default('') }}" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game.id }}" class="btn btn-outline" style="flex: 1; text-align:center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
 EDIT_POST_HTML = """<div class="card" style="border-color: var(--accent);"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: var(--accent);">自分の布教を編集する</h2><form action="/games/{{ game_id }}/posts/{{ post.id }}/edit" method="post"><div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="{{ post.username }}" required></div><div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;"><div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" value="{{ post.catchphrase | default('') }}" required style="border-color: rgba(245, 158, 11, 0.5);"></div><div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;"><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" value="{{ post.target_audience | default('') }}"></div><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" value="{{ post.play_time | default('') }}"></div></div><div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">{% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}{% for pt in points %}<label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);"><input type="checkbox" name="oshi_points" value="{{ pt }}" {% if post and pt in post.oshi_points|default('') %}checked{% endif %}><span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span></label>{% endfor %}</div></div></div><div class="form-group"><label>ネタバレレベル:</label><div class="spoiler-radio-group"><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" {% if post.spoiler_level == 0 %}checked{% endif %}> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1" {% if post.spoiler_level == 1 %}checked{% endif %}> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2" {% if post.spoiler_level == 2 %}checked{% endif %}> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div></label></div></div><div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required>{{ post.content }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game_id }}" class="btn btn-outline" style="flex: 1; text-align: center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
 
-def render_page(content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
+def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
     content_html = Template(content_template_str).render(**kwargs)
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
     final_desc = og_description if og_description else "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。"
     
     return HTMLResponse(Template(BASE_HTML).render(
-        css=CSS, js=JS, content=content_html, is_top=is_top, 
+        request=request, css=CSS, js=JS, content=content_html, is_top=is_top, 
         page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema, **kwargs
     ))
 
@@ -1324,7 +1324,7 @@ async def api_games_list():
     return games
 
 @app.get("/")
-async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
+async def read_root(request: Request, q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
     order_clause = "g.created_at DESC"
     if sort == "posts": order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
     query = f'''SELECT g.*, (SELECT catchphrase FROM posts p WHERE p.game_id = g.id ORDER BY p.created_at DESC LIMIT 1) as latest_catchphrase, (SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) as post_count FROM games g WHERE 1=1'''
@@ -1363,7 +1363,7 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
         weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
         requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
         
-    return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
+    return render_page(request, INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
 
 @app.get("/games/random")
 async def random_game():
@@ -1373,8 +1373,8 @@ async def random_game():
     return RedirectResponse(url="/", status_code=303)
 
 @app.get("/games/new")
-async def new_game_form(title: str = ""):
-    return render_page(NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge", title=title)
+async def new_game_form(request: Request, title: str = ""):
+    return render_page(request, NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge", title=title)
 
 @app.post("/games/new")
 async def create_game(
@@ -1393,7 +1393,7 @@ async def create_game(
     
     with get_db_connection() as conn:
         if conn.execute('SELECT id FROM games WHERE LOWER(title) = LOWER(%s)', (title,)).fetchone():
-            return render_page(NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, page_title="ゲームを追加する - Oshi-Ge")
+            return render_page(request, NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, page_title="ゲームを追加する - Oshi-Ge")
         
         cursor_game = conn.execute('INSERT INTO games (title, description, genre, platform, image_url) VALUES (%s, %s, %s, %s, %s) RETURNING id', (title, description, genre, platform, image_url))
         game_id = cursor_game.fetchone()["id"]
@@ -1408,11 +1408,11 @@ async def create_game(
     return res
 
 @app.get("/games/{game_id}/edit")
-async def edit_game_form(game_id: int):
+async def edit_game_form(request: Request, game_id: int):
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
     if not game: raise HTTPException(status_code=404, detail="Game not found")
-    return render_page(EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
+    return render_page(request, EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/edit")
 async def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""), existing_image_url: str = Form("")):
@@ -1447,7 +1447,7 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     base_url = f"{scheme}://{host}" if host else ""
     og_img = f"{base_url}/games/{game_id}/ogp.png"
     
-    return render_page(GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img, game_schema=game)
+    return render_page(request, GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img, game_schema=game)
 
 @app.post("/games/{game_id}/posts")
 async def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
@@ -1471,7 +1471,7 @@ async def edit_post_form(request: Request, game_id: int, post_id: int):
     with get_db_connection() as conn:
         post = conn.execute('SELECT * FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
     if not post: raise HTTPException(status_code=404)
-    return render_page(EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
+    return render_page(request, EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/posts/{post_id}/edit")
 async def update_post(request: Request, game_id: int, post_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
@@ -1530,7 +1530,7 @@ async def mypage(request: Request):
         if bookmarks:
             bookmarked_games = conn.execute("SELECT * FROM games WHERE id = ANY(%s) ORDER BY created_at DESC", (bookmarks,)).fetchall()
             
-    return render_page(MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, page_title="マイページ - Oshi-Ge")
+    return render_page(request, MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, page_title="マイページ - Oshi-Ge")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
