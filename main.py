@@ -82,6 +82,9 @@ def init_db():
             conn.execute('''CREATE TABLE IF NOT EXISTS reports (
                 id SERIAL PRIMARY KEY, post_id INTEGER REFERENCES posts(id), 
                 reason TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS requests (
+                id SERIAL PRIMARY KEY, title TEXT NOT NULL, username TEXT NOT NULL, 
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
@@ -769,7 +772,6 @@ BASE_HTML = """
                 <button type="submit" class="btn btn-primary">絞り込み</button>
             </div>
         </form>
-        <a href="/games/random" class="btn btn-outline" style="margin-top: 1rem; border-style: dashed;">🎲 ランダムにゲームを探す</a>
     </div>
     {% endif %}
     <main>{{ content }}</main>
@@ -835,6 +837,13 @@ BASE_HTML = """
 """
 
 INDEX_HTML = """
+<!-- ▼ 改善1：お題バナー -->
+<div style="background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; text-align: center; box-shadow: 0 10px 25px rgba(245, 158, 11, 0.3); border: 2px solid #fbbf24; cursor: pointer; transition: transform 0.2s;" onclick="location.href='/games/new'" onmouseover="this.style.transform='translateY(-4px)'" onmouseout="this.style.transform='translateY(0)'">
+    <div style="color: #fff; font-weight: bold; font-size: 0.95rem; margin-bottom: 0.5rem; letter-spacing: 0.1em;">🔥 今週のピックアップお題</div>
+    <h2 style="color: #fff; margin: 0 0 1rem 0; font-size: 1.8rem; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">「100時間以上溶かした時間泥棒ゲーム」</h2>
+    <div class="btn" style="background: #fff; color: #d97706; padding: 0.8rem 2.5rem; border-radius: 30px; font-weight: 900; box-shadow: 0 4px 10px rgba(0,0,0,0.2);">お題に沿って布教を書く ✍️</div>
+</div>
+
 <div class="discover-panel">
     <h3>🔎 目的からゲームを探す</h3>
     <div style="color: var(--text-sub); margin-bottom: 0.9rem;">タイトルを知らなくても大丈夫。気分や好みから探せます。</div>
@@ -846,9 +855,11 @@ INDEX_HTML = """
         <a class="quick-filter {% if q == 'ホラー' %}active{% endif %}" href="/?q=ホラー">😱 ホラー</a>
         <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
         <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
-        <a class="quick-filter" href="/games/random">🎲 完全ランダム</a>
+        <!-- ▼ 改善3：ガチャボタンの強化 -->
+        <a class="quick-filter" href="/games/random" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
     </div>
 </div>
+
 <div class="layout-wrapper">
     <div class="main-column">
         <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
@@ -879,6 +890,31 @@ INDEX_HTML = """
         </div>
     </div>
     <div class="sidebar-column">
+        <!-- ▼ 改善2：布教リクエスト機能 -->
+        <div class="card" style="border-color: #3b82f6; padding: 1.2rem; background: rgba(59, 130, 246, 0.05);">
+            <h3 style="margin-top: 0; color: #3b82f6; border-bottom: 1px solid rgba(59, 130, 246, 0.3); padding-bottom: 0.5rem;">🙋 誰か布教して！</h3>
+            <p style="font-size: 0.85rem; color: var(--text-sub); margin-bottom: 1rem;">気になっているゲームのプレゼンを誰かにリクエストしよう。</p>
+            <form action="/requests" method="post" style="margin-bottom: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                <input type="text" name="title" placeholder="ゲームタイトルを入力" required style="padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white;">
+                <input type="text" name="username" placeholder="あなたの名前 (匿名可)" value="名無しのゲーマー" required style="padding: 0.5rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white; font-size: 0.9rem;">
+                <button type="submit" class="btn btn-primary btn-small" style="background: #3b82f6; border: none; font-size: 1rem; padding: 0.6rem;">リクエストを送信 ✈️</button>
+            </form>
+            
+            <div style="display: flex; flex-direction: column; gap: 0.8rem;">
+                <div style="font-size: 0.85rem; font-weight: bold; color: var(--text-sub);">現在募集中のリクエスト</div>
+                {% for req in requests %}
+                <div style="background: #0f172a; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
+                    <div style="font-weight: bold; color: var(--text-main); font-size: 0.95rem;">{{ req.title }}</div>
+                    <div style="font-size: 0.75rem; color: var(--text-sub); margin-top: 0.3rem;">👤 リクエスター: {{ req.username }}</div>
+                    <!-- ▼ ここをクリックするとタイトルが入った状態で投稿画面へ -->
+                    <a href="/games/new?title={{ req.title | urlencode }}" style="display: inline-block; margin-top: 0.6rem; font-size: 0.85rem; color: #f59e0b; text-decoration: none; font-weight: bold; padding: 0.3rem 0.6rem; background: rgba(245, 158, 11, 0.1); border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.3);">👉 このゲームを布教する</a>
+                </div>
+                {% else %}
+                <div style="color: var(--text-sub); font-size: 0.85rem; text-align: center;">現在リクエストはありません。</div>
+                {% endfor %}
+            </div>
+        </div>
+
         <div class="card" style="border-color: var(--accent); padding: 1.2rem;">
             <h3 style="margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">👑 今週の注目ゲーム</h3>
             <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
@@ -1226,7 +1262,9 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
     with get_db_connection() as conn:
         games = conn.execute(query + f" ORDER BY {order_clause}", params).fetchall()
         weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
-    return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking)
+        requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
+        
+    return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
 
 @app.get("/games/random")
 async def random_game():
@@ -1236,7 +1274,8 @@ async def random_game():
     return RedirectResponse(url="/", status_code=303)
 
 @app.get("/games/new")
-async def new_game_form(): return render_page(NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge")
+async def new_game_form(title: str = ""):
+    return render_page(NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge", title=title)
 
 @app.post("/games/new")
 async def create_game(
@@ -1371,6 +1410,15 @@ async def toggle_bookmark(request: Request, game_id: int):
     res = JSONResponse(content={"bookmarked": is_bookmarked})
     res.set_cookie("bookmarks", ",".join(map(str, bookmarks)), max_age=60*60*24*365)
     return res
+
+@app.post("/requests")
+async def create_request(request: Request, title: str = Form(...), username: str = Form("名無しのゲーマー")):
+    if not check_rate_limit(request):
+        return HTMLResponse("<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>")
+    with get_db_connection() as conn:
+        conn.execute('INSERT INTO requests (title, username) VALUES (%s, %s)', (title, username))
+        conn.commit()
+    return RedirectResponse(url="/", status_code=303)
 
 @app.get("/mypage")
 async def mypage(request: Request):
