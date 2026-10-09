@@ -421,7 +421,6 @@ function closeCropModal() {
     document.getElementById('image_upload').value = ""; 
 }
 
-// ▼ 神ゲー発掘ガチャの演出アニメーション制御
 let allGamesList = [];
 async function initGachaData() {
     try {
@@ -432,9 +431,7 @@ async function initGachaData() {
 
 async function startGacha(event) {
     event.preventDefault();
-    if (allGamesList.length === 0) {
-        await initGachaData();
-    }
+    if (allGamesList.length === 0) { await initGachaData(); }
     if (allGamesList.length === 0) {
         alert("現在登録されているゲームがありません！");
         return;
@@ -449,7 +446,6 @@ async function startGacha(event) {
     btnEl.style.display = 'none';
     titleEl.innerText = "🎲 ガチャ回転中...";
 
-    // 演出用スロット回転（約2秒間シャッフル）
     let count = 0;
     const maxCount = 20;
     const interval = setInterval(() => {
@@ -458,7 +454,6 @@ async function startGacha(event) {
         count++;
         if (count >= maxCount) {
             clearInterval(interval);
-            // 最終決定
             const selectedGame = allGamesList[Math.floor(Math.random() * allGamesList.length)];
             titleEl.innerHTML = `🎉 神ゲー発掘！<br><span style="color: var(--accent); font-size: 1.8rem;">『${selectedGame.title}』</span>`;
             btnEl.innerText = "✨ このゲームを見に行く";
@@ -769,11 +764,13 @@ BASE_HTML = """
     <meta property="og:type" content="website">
     <meta property="og:title" content="{{ page_title | default('Oshi-Ge | ネタバレなしゲーム布教サイト') }}">
     <meta property="og:description" content="{{ og_description | default('未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。') }}">
+    <!-- ▼ トップページや共通ページでもOGP画像（ブランドロゴ等）が表示されるように修正 -->
+    <meta property="og:image" content="{{ og_image | default(request.url.scheme ~ '://' ~ request.headers.host ~ '/robots.txt') | replace('/robots.txt', '') }}/static-ogp.png">
     {% if og_image %}
     <meta property="og:image" content="{{ og_image }}">
     <meta name="twitter:card" content="summary_large_image">
     {% else %}
-    <meta name="twitter:card" content="summary">
+    <meta name="twitter:card" content="summary_large_image">
     {% endif %}
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
     
@@ -836,7 +833,7 @@ BASE_HTML = """
     {% endif %}
     <main>{{ content }}</main>
 
-    <!-- ▼ ガチャ演出用モーダル -->
+    <!-- ガチャ演出用モーダル -->
     <div id="gacha-modal" class="promo-modal" style="display:none; z-index: 10000;" onclick="if(event.target===this) closeGachaModal();">
         <div class="promo-modal-box" style="width: min(500px, 100%); background: radial-gradient(circle, #1e293b 0%, #0f172a 100%); border: 2px solid var(--accent); text-align: center; padding: 2.5rem 1.5rem;">
             <h3 style="color: var(--accent); font-size: 1.5rem; margin-bottom: 1.5rem;">🎰 神ゲー発掘ガチャ</h3>
@@ -929,7 +926,6 @@ INDEX_HTML = """
         <a class="quick-filter {% if q == 'ホラー' %}active{% endif %}" href="/?q=ホラー">😱 ホラー</a>
         <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
         <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
-        <!-- ▼ ガチャボタンをクリックすると演出モーダルが起動 -->
         <a class="quick-filter" href="#" onclick="startGacha(event)" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
     </div>
 </div>
@@ -1321,7 +1317,6 @@ def render_page(content_template_str, is_top=False, page_title=None, og_descript
         page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema, **kwargs
     ))
 
-# ▼ ガチャ用のゲーム一覧データを返すAPIエンドポイントを追加
 @app.get("/api/games-list")
 async def api_games_list():
     with get_db_connection() as conn:
