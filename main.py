@@ -136,6 +136,28 @@ async def proxy_image(url: str):
     except Exception:
         raise HTTPException(status_code=404)
 
+# ▼ トップページ専用のOGP画像動的生成エンドポイント
+@app.get("/ogp.png")
+async def generate_top_ogp():
+    W, H = 1200, 630
+    img = Image.new('RGB', (W, H), color='#0f172a')
+    draw = ImageDraw.Draw(img)
+    try:
+        font_title = ImageFont.truetype(FONT_PATH, 64)
+        font_sub = ImageFont.truetype(FONT_PATH, 32)
+    except:
+        font_title = ImageFont.load_default()
+        font_sub = ImageFont.load_default()
+
+    draw.rectangle([(0, 0), (20, H)], fill="#f59e0b")
+    draw.text((80, 160), "🎮 Oshi-Ge", font=font_title, fill="#f59e0b")
+    draw.text((80, 260), "誰かの人生を変える1本を。", font=font_title, fill="#ffffff")
+    draw.text((80, 360), "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ", font=font_sub, fill="#94a3b8")
+
+    img_byte_arr = io.BytesIO()
+    img.save(img_byte_arr, format='PNG')
+    return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+
 @app.get("/games/{game_id}/ogp.png")
 async def generate_ogp(game_id: int):
     with get_db_connection() as conn:
@@ -741,8 +763,6 @@ async function drawPromoCard() {
     }
 }
 
-Base64 = null;  // placeholder to prevent unused errors if any
-
 function downloadPromoCard() {
     const canvas = document.getElementById('promoCanvas');
     if (!canvas) return;
@@ -770,7 +790,8 @@ BASE_HTML = """
     <meta property="og:image" content="{{ og_image }}">
     <meta name="twitter:card" content="summary_large_image">
     {% else %}
-    <meta name="twitter:card" content="summary">
+    <meta property="og:image" content="{{ request.url.scheme }}://{{ request.headers.host }}/ogp.png">
+    <meta name="twitter:card" content="summary_large_image">
     {% endif %}
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
     
