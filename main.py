@@ -136,6 +136,7 @@ async def proxy_image(url: str):
     except Exception:
         raise HTTPException(status_code=404)
 
+# ▼ トップページ専用のOGP画像動的生成エンドポイント
 @app.get("/ogp.png")
 async def generate_top_ogp():
     W, H = 1200, 630
@@ -936,16 +937,16 @@ INDEX_HTML = """
 </div>
 
 <div class="discover-panel">
-    <h3>🔎 目的からゲームを探す（自動特集）</h3>
-    <div style="color: var(--text-sub); margin-bottom: 0.9rem;">タグや気分を選ぶと、その条件に合うゲームが自動で特集表示されます。</div>
+    <h3>🔎 目的からゲームを探す</h3>
+    <div style="color: var(--text-sub); margin-bottom: 0.9rem;">タイトルを知らなくても大丈夫。気分や好みから探せます。</div>
     <div class="quick-filter-grid">
-        <a class="quick-filter {% if q == 'ストーリー' %}active{% endif %}" href="/?q=ストーリー">📖 ストーリーが最高</a>
-        <a class="quick-filter {% if q == 'キャラクター' %}active{% endif %}" href="/?q=キャラクター">👤 キャラが魅力的</a>
-        <a class="quick-filter {% if q == 'BGM' %}active{% endif %}" href="/?q=BGM">🎵 BGM・音楽が神</a>
-        <a class="quick-filter {% if q == 'バトル' %}active{% endif %}" href="/?q=バトル">⚔️ バトルが爽快</a>
-        <a class="quick-filter {% if q == '世界観' %}active{% endif %}" href="/?q=世界観">🌍 世界観に浸れる</a>
-        <a class="quick-filter {% if q == 'やり込み' %}active{% endif %}" href="/?q=やり込み">⏳ やり込み要素</a>
-        <a class="quick-filter {% if q == '演出' %}active{% endif %}" href="/?q=演出">🎬 演出がエモい泣ける</a>
+        <a class="quick-filter {% if q == 'ストーリー' %}active{% endif %}" href="/?q=ストーリー">📖 ストーリー重視</a>
+        <a class="quick-filter {% if q == '泣ける' %}active{% endif %}" href="/?q=泣ける">😭 泣ける</a>
+        <a class="quick-filter {% if q == '一人' %}active{% endif %}" href="/?q=一人">👤 一人で遊びたい</a>
+        <a class="quick-filter {% if q == '短時間' %}active{% endif %}" href="/?q=短時間">⏱ 短時間</a>
+        <a class="quick-filter {% if q == 'ホラー' %}active{% endif %}" href="/?q=ホラー">😱 ホラー</a>
+        <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
+        <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
         <a class="quick-filter" href="#" onclick="startGacha(event)" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
     </div>
 </div>
@@ -953,7 +954,7 @@ INDEX_HTML = """
 <div class="layout-wrapper">
     <div class="main-column">
         <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
-            <h3 style="margin:0;">{% if q %}「{{ q }}」の自動特集ゲーム一覧{% else %}布教されているゲーム{% endif %}</h3>
+            <h3 style="margin:0;">布教されているゲーム</h3>
             <div style="display: flex; gap: 0.5rem;">
                 <a href="?sort=new{% if q %}&q={{ q }}{% endif %}{% if genre %}&genre={{ genre }}{% endif %}{% if platform %}&platform={{ platform }}{% endif %}" class="btn btn-outline btn-small" style="{% if sort == 'new' or not sort %}background:rgba(245,158,11,0.1); border-color:var(--accent); color:var(--accent);{% endif %}">🕒 最新順</a>
                 <a href="?sort=posts{% if q %}&q={{ q }}{% endif %}{% if genre %}&genre={{ genre }}{% endif %}{% if platform %}&platform={{ platform }}{% endif %}" class="btn btn-outline btn-small" style="{% if sort == 'posts' %}background:rgba(245,158,11,0.1); border-color:var(--accent); color:var(--accent);{% endif %}">🔥 投稿数順</a>
@@ -1353,12 +1354,12 @@ async def read_root(request: Request, q: str = "", genre: str = "", platform: st
     if q:
         synonyms = {
             "ストーリー": ["ストーリー", "シナリオ", "物語"],
-            "キャラクター": ["キャラ", "キャラクター", "仲間"],
-            "BGM": ["BGM", "音楽", "サウンド", "曲"],
-            "バトル": ["バトル", "戦闘", "アクション", "爽快"],
-            "世界観": ["世界観", "雰囲気", "フィールド", "没入"],
-            "やり込み": ["やり込み", "育成", "収集", "クリア後"],
-            "演出": ["演出", "エモい", "泣ける", "感動", "ラスト"]
+            "泣ける": ["泣ける", "泣いた", "涙", "感動", "号泣", "切ない"],
+            "一人": ["一人", "1人", "ソロ", "シングル", "没入"],
+            "短時間": ["短時間", "サクッと", "短い", "手軽", "テンポ", "休日"],
+            "ホラー": ["ホラー", "怖い", "恐怖", "ホラゲー", "驚く"],
+            "インディー": ["インディー", "同人", "個人制作"],
+            "初心者": ["初心者", "初めて", "入門", "簡単", "やさしい", "優しい", "誰でも"]
         }
         
         search_words = synonyms.get(q, [q])
@@ -1369,14 +1370,11 @@ async def read_root(request: Request, q: str = "", genre: str = "", platform: st
             word_conditions.append("""(
                 g.title ILIKE %s OR COALESCE(g.description, '') ILIKE %s OR EXISTS (
                     SELECT 1 FROM posts sp WHERE sp.game_id = g.id AND (
-                        COALESCE(sp.catchphrase, '') ILIKE %s OR COALESCE(sp.target_audience, '') ILIKE %s OR COALESCE(sp.play_time, '') ILIKE %s OR COALESCE(sp.content, '') ILIKE %s OR COALESCE(sp.oshi_points, '') ILIKE %s
+                        COALESCE(sp.catchphrase, '') ILIKE %s OR COALESCE(sp.target_audience, '') ILIKE %s OR COALESCE(sp.play_time, '') ILIKE %s OR COALESCE(sp.content, '') ILIKE %s
                     )
                 )
             )""")
-            # パラメータ数を合わせるためもう1つ追加
-            params.append(search_pattern)
-            # 条件クエリを再構成
-        query += " AND (" + " OR ".join([wc.replace("OR COALESCE(sp.content, '') ILIKE %s", "OR COALESCE(sp.content, '') ILIKE %s OR COALESCE(sp.oshi_points, '') ILIKE %s") for wc in word_conditions]) + ")"
+        query += " AND (" + " OR ".join(word_conditions) + ")"
 
     if genre: query += " AND g.genre = %s"; params.append(genre)
     if platform: query += " AND g.platform ILIKE %s"; params.append('%' + platform + '%')
