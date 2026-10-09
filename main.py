@@ -846,7 +846,7 @@ BASE_HTML = """
 """
 
 INDEX_HTML = """
-<!-- ▼ 改善1：お題バナー -->
+<!-- お題バナー -->
 <div style="background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; text-align: center; box-shadow: 0 10px 25px rgba(245, 158, 11, 0.3); border: 2px solid #fbbf24; cursor: pointer; transition: transform 0.2s;" onclick="location.href='/games/new'" onmouseover="this.style.transform='translateY(-4px)'" onmouseout="this.style.transform='translateY(0)'">
     <div style="color: #fff; font-weight: bold; font-size: 0.95rem; margin-bottom: 0.5rem; letter-spacing: 0.1em;">🔥 今週のピックアップお題</div>
     <h2 style="color: #fff; margin: 0 0 1rem 0; font-size: 1.8rem; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">「100時間以上溶かした時間泥棒ゲーム」</h2>
@@ -898,22 +898,6 @@ INDEX_HTML = """
         </div>
     </div>
     <div class="sidebar-column">
-        <!-- ▼ 改善2：新着・直近の布教ピックアップ（回遊強化） -->
-        <div class="card" style="border-color: var(--accent); padding: 1.2rem; background: rgba(245, 158, 11, 0.03);">
-            <h3 style="margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; font-size: 1.1rem;">💬 新着の熱い布教</h3>
-            <div style="display: flex; flex-direction: column; gap: 0.8rem; margin-top: 1rem;">
-                {% for p in recent_posts %}
-                <div style="background: #0f172a; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border); cursor: pointer;" onclick="location.href='/games/{{ p.game_id }}'">
-                    <div style="font-size: 0.8rem; color: var(--accent); font-weight: bold; margin-bottom: 0.2rem;">🎮 {{ p.game_title }}</div>
-                    <div style="font-size: 0.85rem; color: #f1f5f9; font-weight: bold; margin-bottom: 0.3rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">「{{ p.catchphrase }}」</div>
-                    <div style="font-size: 0.75rem; color: var(--text-sub); text-align: right;">by {{ p.username }}</div>
-                </div>
-                {% else %}
-                <div style="color: var(--text-sub); font-size: 0.85rem; text-align: center;">まだ布教はありません。</div>
-                {% endfor %}
-            </div>
-        </div>
-
         <!-- 布教リクエスト機能 -->
         <div class="card" style="border-color: #3b82f6; padding: 1.2rem; background: rgba(59, 130, 246, 0.05);">
             <h3 style="margin-top: 0; color: #3b82f6; border-bottom: 1px solid rgba(59, 130, 246, 0.3); padding-bottom: 0.5rem;">🙋 誰か布教して！</h3>
@@ -997,7 +981,7 @@ GAME_HTML = """
     </summary>
     <form action="/games/{{ game.id }}/posts" method="post" style="margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
         
-        <!-- ▼ 改善1：投稿フォームへの「布教のヒント」表示 -->
+        <!-- 布教のヒント -->
         <div style="background: rgba(245, 158, 11, 0.08); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; color: #cbd5e1;">
             <div style="font-weight: bold; color: var(--accent); margin-bottom: 0.4rem;">💡 布教のヒント（こんなことを書くと魅力が伝わります！）</div>
             <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-sub);">
@@ -1212,7 +1196,7 @@ NEW_GAME_HTML = """
 
         <h3 style="margin-top: 2rem; color: var(--accent); border-top: 1px dashed var(--border); padding-top: 1.5rem;">🔥 最初の布教コメント</h3>
         
-        <!-- ▼ 改善1：新規追加フォームへの「布教のヒント」表示 -->
+        <!-- 布教のヒント -->
         <div style="background: rgba(245, 158, 11, 0.08); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; color: #cbd5e1;">
             <div style="font-weight: bold; color: var(--accent); margin-bottom: 0.4rem;">💡 布教のヒント（こんなことを書くと魅力が伝わります！）</div>
             <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-sub);">
@@ -1310,10 +1294,8 @@ async def read_root(q: str = "", genre: str = "", platform: str = "", sort: str 
         games = conn.execute(query + f" ORDER BY {order_clause}", params).fetchall()
         weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
         requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
-        # ▼ 改善2用の新着布教リストを取得
-        recent_posts = conn.execute('''SELECT p.catchphrase, p.username, g.title as game_title, g.id as game_id FROM posts p JOIN games g ON p.game_id = g.id ORDER BY p.created_at DESC LIMIT 3''').fetchall()
         
-    return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests, recent_posts=recent_posts)
+    return render_page(INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
 
 @app.get("/games/random")
 async def random_game():
