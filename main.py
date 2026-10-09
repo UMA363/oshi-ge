@@ -291,7 +291,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .quick-filter:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
 .quick-filter.active { background-color: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 6px rgba(245,158,11,0.2); }
 
-@media (max-width: 600px) {
+@media (max-width: 600px) { 
     html { font-size: 16px; }
     .header-container { flex-direction: column; gap: 1rem; text-align: center; padding: 1rem; }
     .header-container h1 { font-size: 1.5rem; }
@@ -325,8 +325,14 @@ function toggleSpoiler(btn) {
         else btn.innerText = "⚠️ ネタバレあり【クリックして表示】";
     }
 }
-function shareGameToX(title) { window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n#OshiGe\\n`)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); }
-function shareGameToLine(title) { window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n#OshiGe\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); }
+function shareGameToX(title) { 
+    const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
+    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #ゲーム好きと繋がりたい #OshiGe\\n`;
+    window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
+}
+function shareGameToLine(title) { 
+    window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); 
+}
 
 function sharePost(btn, platform) {
     const gameId = btn.dataset.id;
@@ -335,6 +341,9 @@ function sharePost(btn, platform) {
     const content = btn.dataset.content;
     const spoilerLevel = Number(btn.dataset.spoiler || '0');
     const url = window.location.origin + '/games/' + gameId;
+    
+    const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
+    
     let text = `このゲーム、もっと知られてほしい。\\n\\n🎮 『${title}』`;
     if (catchphrase) text += `\\n\\n「${catchphrase}」`;
     if (spoilerLevel === 0 && content.trim()) {
@@ -343,7 +352,7 @@ function sharePost(btn, platform) {
         text += `\\n\\n💬「${impression}」`;
     } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
     else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
-    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n#OshiGe`;
+    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #ゲーム好きと繋がりたい #OshiGe`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
     else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
@@ -1303,7 +1312,6 @@ async def create_game(
         post_id = cursor_post.fetchone()["id"]
         conn.commit()
     
-    # 投稿完了のパラメータ（?posted=）を付与
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
     c = request.cookies.get("my_posts", "")
     res.set_cookie(key="my_posts", value=f"{c},{post_id}" if c else str(post_id), max_age=60*60*24*365)
@@ -1349,7 +1357,6 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     base_url = f"{scheme}://{host}" if host else ""
     og_img = f"{base_url}/games/{game_id}/ogp.png"
     
-    # game_schemaを渡して構造化データ（JSON-LD）を生成
     return render_page(GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img, game_schema=game)
 
 @app.post("/games/{game_id}/posts")
@@ -1363,7 +1370,6 @@ async def create_post(request: Request, game_id: int, username: str = Form(...),
         post_id = cursor.fetchone()["id"]
         conn.commit()
         
-    # 投稿完了のパラメータ（?posted=）を付与
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
     c = request.cookies.get("my_posts", "")
     res.set_cookie(key="my_posts", value=f"{c},{post_id}" if c else str(post_id), max_age=60*60*24*365)
