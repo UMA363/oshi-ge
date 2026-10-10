@@ -270,8 +270,10 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .btn-outline { background-color: transparent; border: 2px solid var(--border); color: var(--text-main); }
 .btn-outline:hover { border-color: var(--accent); color: var(--accent); }
 .btn-small { padding: 0.4rem 0.8rem; font-size: 0.85rem; }
-.btn-x { background-color: #000; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #333; }
-.btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #05a546;}
+.btn-x { background-color: #000; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #333; transition: all 0.2s; border-radius: 8px; cursor: pointer; }
+.btn-x:hover { background-color: #222; }
+.btn-line { background-color: #06C755; color: #fff; padding: 0.5rem 1rem; font-size: 0.9rem; border: 1px solid #05a546; transition: all 0.2s; border-radius: 8px; cursor: pointer; }
+.btn-line:hover { background-color: #05a546; }
 .btn-bookmark { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 0.9rem; transition: 0.2s; white-space: nowrap; }
 .btn-bookmark.bookmarked { background: rgba(16, 185, 129, 0.1); border-color: var(--safe); color: var(--safe); }
 .form-group { margin-bottom: 1.5rem; }
@@ -304,21 +306,15 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .spoiler-toggle-btn.warning { color: var(--warning); border-color: rgba(245, 158, 11, 0.5); }
 .spoiler-toggle-btn.danger { color: var(--danger); border-color: rgba(239, 68, 68, 0.5); }
 .spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
-
-/* リアクションボタンのデザイン */
 .btn-react { background: transparent; border: 1px solid var(--border); color: var(--text-sub); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; white-space: nowrap; }
 .btn-react:hover { transform: translateY(-2px); border-color: #94a3b8; color: var(--text-main); }
 .btn-react span { background: rgba(255,255,255,0.05); padding: 0.1rem 0.5rem; border-radius: 12px; font-size: 0.8rem; }
-/* やってみる！ */
 .btn-react.reacted.btn-wanna-play { background: rgba(16, 185, 129, 0.1); border-color: var(--safe); color: var(--safe); }
 .btn-react.reacted.btn-wanna-play span { background: rgba(16, 185, 129, 0.2); }
-/* わかる */
 .btn-react.reacted.btn-agree { background: rgba(59, 130, 246, 0.1); border-color: #3b82f6; color: #3b82f6; }
 .btn-react.reacted.btn-agree span { background: rgba(59, 130, 246, 0.2); }
-/* いいね */
 .btn-react.reacted.btn-like { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
 .btn-react.reacted.btn-like span { background: rgba(245, 158, 11, 0.2); }
-
 .discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
 .discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
 .quick-filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.6rem; }
@@ -339,7 +335,6 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .game-header-row { flex-direction: column; align-items: stretch !important; gap: 0.75rem !important; }
     .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
     .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
-    
     .btn-react { flex: 1; justify-content: center; padding: 0.4rem 0.2rem; font-size: 0.75rem; gap: 0.2rem; }
     .btn-react span { font-size: 0.7rem; padding: 0.1rem 0.3rem; }
     .post-card > div:last-child { flex-direction: column; align-items: stretch !important; gap: 1rem !important; }
@@ -366,7 +361,6 @@ function toggleSpoiler(btn) {
     }
 }
 
-// ⬇ 修正箇所1：ゲーム単体の共有
 function shareGameToX(title) { 
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
     const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123\\n`;
@@ -377,7 +371,6 @@ function shareGameToLine(title) {
     window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
-// ⬇ 修正箇所2：布教カードの共有
 function sharePost(btn, platform) {
     const gameId = btn.dataset.id;
     const title = btn.dataset.title;
@@ -397,7 +390,6 @@ function sharePost(btn, platform) {
     } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
     else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
     
-    // 最後にアカウントへのメンションを付与
     text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
@@ -802,6 +794,33 @@ function downloadPromoCard() {
     a.href = canvas.toDataURL('image/png');
     a.click();
 }
+
+function sharePromoCardToX() {
+    const modal = document.getElementById('promo-card-modal');
+    const title = modal.dataset.title || '';
+    const catchphrase = modal.dataset.catchphrase || '';
+    const spoilerLevel = Number(modal.dataset.spoiler || '0');
+    const content = modal.dataset.content || '';
+    
+    const url = window.location.href.split('?')[0]; 
+    const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
+    
+    let text = `このゲーム、もっと知られてほしい。\\n\\n🎮 『${title}』`;
+    if (catchphrase) text += `\\n\\n「${catchphrase}」`;
+    
+    if (spoilerLevel === 0 && content.trim()) {
+        let impression = content.trim();
+        if (Array.from(impression).length > 20) impression = Array.from(impression).slice(0, 20).join('') + '…';
+        text += `\\n\\n💬「${impression}」`;
+    } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
+    else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
+    
+    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123`;
+    
+    alert("この後開くXの投稿画面で、先ほど保存した「布教カード画像」を貼り付けてポストしてください！");
+    window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
+}
+
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePromoCard(); });
 """
 
@@ -946,8 +965,9 @@ BASE_HTML = """
                     <canvas id="promoCanvas" style="display:none;"></canvas>
                     <img id="promoResultImg" style="max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: none;">
                 </div>
-                <div class="promo-modal-actions" style="justify-content: center; margin-top: 1rem;">
-                    <button type="button" id="promo-dl-btn" class="btn btn-primary" onclick="downloadPromoCard()" style="font-size: 1.1rem; padding: 0.8rem 2rem;">📥 画像を保存する</button>
+                <div class="promo-modal-actions" style="justify-content: center; margin-top: 1rem; gap: 1rem;">
+                    <button type="button" id="promo-dl-btn" class="btn btn-primary" onclick="downloadPromoCard()" style="font-size: 1.1rem; padding: 0.8rem 1.5rem;">📥 画像を保存する</button>
+                    <button type="button" class="btn btn-x" onclick="sharePromoCardToX()" style="font-size: 1.1rem; padding: 0.8rem 1.5rem;">🎴 保存した画像と一緒にXでシェア</button>
                 </div>
             </div>
         </div>
