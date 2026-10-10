@@ -92,7 +92,6 @@ def init_db():
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS play_time TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS likes INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS oshi_points TEXT DEFAULT ''")
-            # 新しいリアクションボタン用のカラムを追加
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS wanna_play INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS agree INTEGER DEFAULT 0")
             conn.commit()
@@ -341,10 +340,8 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
     .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
     
-    /* ▼ リアクションボタン＆シェアボタンのスマホ用レイアウト調整 ▼ */
     .btn-react { flex: 1; justify-content: center; padding: 0.4rem 0.2rem; font-size: 0.75rem; gap: 0.2rem; }
     .btn-react span { font-size: 0.7rem; padding: 0.1rem 0.3rem; }
-    /* 下部のアクションエリアを縦並びにして幅100%にする */
     .post-card > div:last-child { flex-direction: column; align-items: stretch !important; gap: 1rem !important; }
     .post-card > div:last-child > div { width: 100%; justify-content: space-between; }
 }
@@ -368,15 +365,19 @@ function toggleSpoiler(btn) {
         else btn.innerText = "⚠️ ネタバレあり【クリックして表示】";
     }
 }
+
+// ⬇ 修正箇所1：ゲーム単体の共有
 function shareGameToX(title) { 
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
-    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #ゲーム好きと繋がりたい #OshiGe\\n`;
+    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123\\n`;
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
+
 function shareGameToLine(title) { 
     window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
+// ⬇ 修正箇所2：布教カードの共有
 function sharePost(btn, platform) {
     const gameId = btn.dataset.id;
     const title = btn.dataset.title;
@@ -395,7 +396,9 @@ function sharePost(btn, platform) {
         text += `\\n\\n💬「${impression}」`;
     } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
     else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
-    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #ゲーム好きと繋がりたい #OshiGe`;
+    
+    // 最後にアカウントへのメンションを付与
+    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
     else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
@@ -514,7 +517,6 @@ function closeGachaModal() {
 
 document.addEventListener("DOMContentLoaded", () => {
     initGachaData();
-    // リアクションボタンの状態復元
     document.querySelectorAll('.btn-react').forEach(b => { 
         if (localStorage.getItem(`reacted_${b.dataset.type}_${b.dataset.postId}`)) {
             b.classList.add('reacted'); 
@@ -1197,7 +1199,6 @@ GAME_HTML = """
                 <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
             </div>
             
-            <!-- ★ 新しいリアクションボタングループ -->
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0;">
                 <button type="button" class="btn-react btn-wanna-play" data-post-id="{{ post.id }}" data-type="wanna_play" onclick="reactPost({{ game.id }}, {{ post.id }}, 'wanna_play', this)">🎮 やってみる！ <span>{{ post.wanna_play | default(0) }}</span></button>
                 <button type="button" class="btn-react btn-agree" data-post-id="{{ post.id }}" data-type="agree" onclick="reactPost({{ game.id }}, {{ post.id }}, 'agree', this)">🤝 わかる <span>{{ post.agree | default(0) }}</span></button>
@@ -1213,7 +1214,6 @@ MYPAGE_HTML = """
 <div class="card">
     <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">👤 マイページ</h2>
     
-    <!-- ★ リアクション通知バナー -->
     <div id="like-notification" style="display: none; background: rgba(16, 185, 129, 0.1); border: 1px solid var(--safe); color: var(--safe); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; justify-content: space-between; align-items: center;">
         <div style="font-weight: bold;">🎉 あなたの布教に新しいリアクションがつきました！</div>
         <button onclick="document.getElementById('like-notification').style.display='none'" style="background: transparent; border: none; color: var(--safe); font-size: 1.2rem; cursor: pointer;">✕</button>
@@ -1275,7 +1275,6 @@ MYPAGE_HTML = """
                         data-oshi="{{ post.oshi_points | default('') | escape }}" 
                         onclick="openPromoCard(this)">🎴 布教カード</button>
                 </div>
-                <!-- ★ 獲得したリアクションの表示 -->
                 <div style="display: flex; gap: 0.8rem; color: var(--text-sub); font-size: 0.9rem; font-weight: bold; flex-shrink: 0;">
                     <span style="color: var(--safe);">🎮 {{ post.wanna_play | default(0) }}</span>
                     <span style="color: #3b82f6;">🤝 {{ post.agree | default(0) }}</span>
@@ -1443,7 +1442,6 @@ async def read_root(request: Request, q: str = "", genre: str = "", platform: st
     
     with get_db_connection() as conn:
         games = conn.execute(query + f" ORDER BY {order_clause}", params).fetchall()
-        # ★ 全リアクションの合計値でランキング化
         weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes + p.wanna_play + p.agree), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
         requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
         
@@ -1518,7 +1516,6 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
         if not game: raise HTTPException(status_code=404, detail="Game not found")
-        # ★ 合計リアクション数でソート
         order_str = 'created_at DESC' if sort == 'new' else '(likes + wanna_play + agree) DESC, created_at DESC'
         posts = conn.execute(f'SELECT * FROM posts WHERE game_id = %s ORDER BY {order_str}', (game_id,)).fetchall()
     
@@ -1575,7 +1572,6 @@ async def report_post(post_id: int, reason: str = Form(...)):
         conn.commit()
     return JSONResponse({"status": "ok"})
 
-# ★ 新しい統合リアクションエンドポイント
 @app.post("/games/{game_id}/posts/{post_id}/react/{react_type}")
 async def react_post(game_id: int, post_id: int, react_type: str):
     valid_types = ["likes", "wanna_play", "agree"]
@@ -1583,7 +1579,6 @@ async def react_post(game_id: int, post_id: int, react_type: str):
         raise HTTPException(status_code=400)
         
     with get_db_connection() as conn:
-        # 動的カラム名は valid_types でバリデーション済みのため安全
         cursor = conn.execute(f'UPDATE posts SET {react_type} = {react_type} + 1 WHERE id = %s RETURNING {react_type}', (post_id,))
         count = cursor.fetchone()[react_type]
         conn.commit()
@@ -1622,7 +1617,6 @@ async def mypage(request: Request):
         if bookmarks:
             bookmarked_games = conn.execute("SELECT * FROM games WHERE id = ANY(%s) ORDER BY created_at DESC", (bookmarks,)).fetchall()
             
-    # ★ マイページのプチ通知も、全リアクションの合計値で判定するようにアップグレード
     total_likes = sum(post.get("likes", 0) + post.get("wanna_play", 0) + post.get("agree", 0) for post in my_posts_list) if my_posts_list else 0
             
     return render_page(request, MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, total_likes=total_likes, page_title="マイページ - Oshi-Ge")
