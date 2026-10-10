@@ -398,7 +398,7 @@ function sharePost(btn, platform) {
     else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
     
     // 最後にアカウントへのメンションを付与
-    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123`;
+    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
     else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
