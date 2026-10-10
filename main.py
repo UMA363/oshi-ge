@@ -87,6 +87,7 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
+            conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS developer_x_id TEXT DEFAULT ''")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS target_audience TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS play_time TEXT")
@@ -361,9 +362,15 @@ function toggleSpoiler(btn) {
     }
 }
 
-function shareGameToX(title) { 
+function shareGameToX(title, devId) { 
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
-    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123\\n`;
+    let mentions = "@horse_123123";
+    if (devId && devId.trim()) {
+        let cleanDevId = devId.trim();
+        if (!cleanDevId.startsWith('@')) cleanDevId = '@' + cleanDevId;
+        mentions += ' ' + cleanDevId;
+    }
+    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}\\n`;
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
@@ -377,6 +384,7 @@ function sharePost(btn, platform) {
     const catchphrase = btn.dataset.catch;
     const content = btn.dataset.content;
     const spoilerLevel = Number(btn.dataset.spoiler || '0');
+    const devId = btn.dataset.dev || '';
     const url = window.location.origin + '/games/' + gameId;
     
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
@@ -390,7 +398,14 @@ function sharePost(btn, platform) {
     } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
     else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
     
-    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123`;
+    let mentions = "@horse_123123";
+    if (devId.trim()) {
+        let cleanDevId = devId.trim();
+        if (!cleanDevId.startsWith('@')) cleanDevId = '@' + cleanDevId;
+        mentions += ' ' + cleanDevId;
+    }
+    
+    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
     else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
@@ -563,6 +578,7 @@ function openPromoCard(btn) {
     modal.dataset.content = btn.dataset.content || '';
     modal.dataset.imageUrl = btn.dataset.img || ''; 
     modal.dataset.oshiPoints = btn.dataset.oshi || '';
+    modal.dataset.dev = btn.dataset.dev || '';
     
     const dlBtn = document.getElementById('promo-dl-btn');
     const instruction = document.getElementById('promo-instruction');
@@ -801,6 +817,7 @@ function sharePromoCardToX() {
     const catchphrase = modal.dataset.catchphrase || '';
     const spoilerLevel = Number(modal.dataset.spoiler || '0');
     const content = modal.dataset.content || '';
+    const devId = modal.dataset.dev || '';
     
     const url = window.location.href.split('?')[0]; 
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
@@ -815,7 +832,14 @@ function sharePromoCardToX() {
     } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
     else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
     
-    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123`;
+    let mentions = "@horse_123123";
+    if (devId.trim()) {
+        let cleanDevId = devId.trim();
+        if (!cleanDevId.startsWith('@')) cleanDevId = '@' + cleanDevId;
+        mentions += ' ' + cleanDevId;
+    }
+    
+    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}`;
     
     alert("この後開くXの投稿画面で、先ほど保存した「布教カード画像」を貼り付けてポストしてください！");
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
@@ -1103,7 +1127,7 @@ GAME_HTML = """
     </div>
 
     <div style="display: flex; gap: 0.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
-        <button type="button" class="btn btn-x" onclick="shareGameToX('{{ game.title }}')">X でゲームを共有</button>
+        <button type="button" class="btn btn-x" onclick="shareGameToX('{{ game.title }}', '{{ game.developer_x_id | default('') }}')">X でゲームを共有</button>
         <button type="button" class="btn btn-line" onclick="shareGameToLine('{{ game.title }}')">LINE でゲームを共有</button>
     </div>
 </div>
@@ -1197,8 +1221,8 @@ GAME_HTML = """
         
         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
             <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">X で共有</button>
-                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
+                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ game.developer_x_id | default('') }}" onclick="sharePost(this, 'x')">X で共有</button>
+                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ game.developer_x_id | default('') }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                 
                 <button type="button" class="btn btn-outline btn-small" 
                     data-id="{{ game.id }}"
@@ -1214,6 +1238,7 @@ GAME_HTML = """
                     data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
                     data-img="{{ game.image_url | default('') | escape }}" 
                     data-oshi="{{ post.oshi_points | default('') | escape }}" 
+                    data-dev="{{ game.developer_x_id | default('') | escape }}" 
                     onclick="openPromoCard(this)">🎴 布教カード</button>
 
                 <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
@@ -1276,8 +1301,8 @@ MYPAGE_HTML = """
             
             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
                 <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                    <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'x')">X で共有</button>
-                    <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" onclick="sharePost(this, 'line')">LINE で共有</button>
+                    <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ post.game_developer_x_id | default('') }}" onclick="sharePost(this, 'x')">X で共有</button>
+                    <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ post.game_developer_x_id | default('') }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                     
                     <button type="button" class="btn btn-outline btn-small" 
                         data-id="{{ post.game_id }}"
@@ -1293,6 +1318,7 @@ MYPAGE_HTML = """
                         data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
                         data-img="{{ post.game_image_url | default('') | escape }}" 
                         data-oshi="{{ post.oshi_points | default('') | escape }}" 
+                        data-dev="{{ post.game_developer_x_id | default('') | escape }}" 
                         onclick="openPromoCard(this)">🎴 布教カード</button>
                 </div>
                 <div style="display: flex; gap: 0.8rem; color: var(--text-sub); font-size: 0.9rem; font-weight: bold; flex-shrink: 0;">
@@ -1351,6 +1377,7 @@ NEW_GAME_HTML = """
             </div>
             <input type="hidden" name="platform" class="platform-hidden" value="{{ platform | default('') }}">
         </div>
+        <div class="form-group"><label>開発者・公式のX(Twitter)ID（任意）:</label><input type="text" name="developer_x_id" placeholder="例：@IndieDev （@は省略可）" value="{{ developer_x_id | default('') }}"></div>
         <div class="form-group"><label>ゲーム画像（任意・自動で最適なサイズに圧縮されます）:</label>
             <input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;">
             <input type="hidden" name="image_base64" id="image_base64">
@@ -1406,7 +1433,7 @@ NEW_GAME_HTML = """
     </form>
 </div>
 """
-EDIT_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲーム情報を編集する</h2><form action="/games/{{ game.id }}/edit" method="post" enctype="multipart/form-data"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ game.title }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if game.genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ game.platform | default('') }}"></div><div class="form-group"><label>ゲーム画像（新しくアップロードして変更する場合のみ選択）:</label><input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;"><input type="hidden" name="image_base64" id="image_base64"><input type="hidden" name="existing_image_url" value="{{ game.image_url | default('') }}"><div id="image_preview" style="margin-top: 1rem; display: {% if game.image_url %}block{% else %}none{% endif %};"><img id="preview_img" src="{{ game.image_url | default('') }}" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game.id }}" class="btn btn-outline" style="flex: 1; text-align:center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
+EDIT_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲーム情報を編集する</h2><form action="/games/{{ game.id }}/edit" method="post" enctype="multipart/form-data"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ game.title }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if game.genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ game.platform | default('') }}"></div><div class="form-group"><label>開発者・公式のX(Twitter)ID（任意）:</label><input type="text" name="developer_x_id" placeholder="例：@IndieDev （@は省略可）" value="{{ game.developer_x_id | default('') }}"></div><div class="form-group"><label>ゲーム画像（新しくアップロードして変更する場合のみ選択）:</label><input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;"><input type="hidden" name="image_base64" id="image_base64"><input type="hidden" name="existing_image_url" value="{{ game.image_url | default('') }}"><div id="image_preview" style="margin-top: 1rem; display: {% if game.image_url %}block{% else %}none{% endif %};"><img id="preview_img" src="{{ game.image_url | default('') }}" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game.id }}" class="btn btn-outline" style="flex: 1; text-align:center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
 EDIT_POST_HTML = """<div class="card" style="border-color: var(--accent);"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: var(--accent);">自分の布教を編集する</h2><form action="/games/{{ game_id }}/posts/{{ post.id }}/edit" method="post"><div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="{{ post.username }}" required></div><div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;"><div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" value="{{ post.catchphrase | default('') }}" required style="border-color: rgba(245, 158, 11, 0.5);"></div><div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;"><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" value="{{ post.target_audience | default('') }}"></div><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" value="{{ post.play_time | default('') }}"></div></div><div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">{% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}{% for pt in points %}<label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);"><input type="checkbox" name="oshi_points" value="{{ pt }}" {% if post and pt in post.oshi_points|default('') %}checked{% endif %}><span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span></label>{% endfor %}</div></div></div><div class="form-group"><label>ネタバレレベル:</label><div class="spoiler-radio-group"><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" {% if post.spoiler_level == 0 %}checked{% endif %}> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1" {% if post.spoiler_level == 1 %}checked{% endif %}> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2" {% if post.spoiler_level == 2 %}checked{% endif %}> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div></label></div></div><div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required>{{ post.content }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game_id }}" class="btn btn-outline" style="flex: 1; text-align: center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
 
 def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
@@ -1482,7 +1509,7 @@ async def new_game_form(request: Request, title: str = ""):
 async def create_game(
     request: Request,
     title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""),
-    username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...),
+    developer_x_id: str = Form(""), username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...),
     oshi_points: List[str] = Form(default=[])
 ):
     if not check_rate_limit(request):
@@ -1495,9 +1522,9 @@ async def create_game(
     
     with get_db_connection() as conn:
         if conn.execute('SELECT id FROM games WHERE LOWER(title) = LOWER(%s)', (title,)).fetchone():
-            return render_page(request, NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, page_title="ゲームを追加する - Oshi-Ge")
+            return render_page(request, NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, developer_x_id=developer_x_id, page_title="ゲームを追加する - Oshi-Ge")
         
-        cursor_game = conn.execute('INSERT INTO games (title, description, genre, platform, image_url) VALUES (%s, %s, %s, %s, %s) RETURNING id', (title, description, genre, platform, image_url))
+        cursor_game = conn.execute('INSERT INTO games (title, description, genre, platform, image_url, developer_x_id) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id', (title, description, genre, platform, image_url, developer_x_id))
         game_id = cursor_game.fetchone()["id"]
         
         cursor_post = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str))
@@ -1517,7 +1544,7 @@ async def edit_game_form(request: Request, game_id: int):
     return render_page(request, EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/edit")
-async def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""), existing_image_url: str = Form("")):
+async def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form(""), existing_image_url: str = Form("")):
     if image_base64 and len(image_base64) > 6600000:
         return HTMLResponse("<script>alert('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。');history.back();</script>")
 
@@ -1527,7 +1554,7 @@ async def update_game(request: Request, game_id: int, title: str = Form(...), de
         if new_url: image_url = new_url
 
     with get_db_connection() as conn:
-        conn.execute('UPDATE games SET title = %s, description = %s, genre = %s, platform = %s, image_url = %s WHERE id = %s', (title, description, genre, platform, image_url, game_id))
+        conn.execute('UPDATE games SET title = %s, description = %s, genre = %s, platform = %s, image_url = %s, developer_x_id = %s WHERE id = %s', (title, description, genre, platform, image_url, developer_x_id, game_id))
         conn.commit()
     return RedirectResponse(url=f"/games/{game_id}", status_code=303)
 
@@ -1633,7 +1660,7 @@ async def mypage(request: Request):
     
     with get_db_connection() as conn:
         if my_posts_ids:
-            my_posts_list = conn.execute("SELECT p.*, g.title as game_title, g.image_url as game_image_url, g.genre as game_genre, g.platform as game_platform FROM posts p JOIN games g ON p.game_id = g.id WHERE p.id = ANY(%s) ORDER BY p.created_at DESC", (my_posts_ids,)).fetchall()
+            my_posts_list = conn.execute("SELECT p.*, g.title as game_title, g.image_url as game_image_url, g.genre as game_genre, g.platform as game_platform, g.developer_x_id as game_developer_x_id FROM posts p JOIN games g ON p.game_id = g.id WHERE p.id = ANY(%s) ORDER BY p.created_at DESC", (my_posts_ids,)).fetchall()
         if bookmarks:
             bookmarked_games = conn.execute("SELECT * FROM games WHERE id = ANY(%s) ORDER BY created_at DESC", (bookmarks,)).fetchall()
             
