@@ -369,7 +369,7 @@ function toggleSpoiler(btn) {
 // ⬇ 修正箇所1：ゲーム単体の共有
 function shareGameToX(title) { 
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
-    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123\\n`;
+    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #OshiGe @horse_123123\\n`;
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
