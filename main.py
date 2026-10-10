@@ -92,6 +92,9 @@ def init_db():
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS play_time TEXT")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS likes INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS oshi_points TEXT DEFAULT ''")
+            # 新しいリアクションボタン用のカラムを追加
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS wanna_play INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS agree INTEGER DEFAULT 0")
             conn.commit()
     except Exception as e:
         pass
@@ -136,7 +139,6 @@ async def proxy_image(url: str):
     except Exception:
         raise HTTPException(status_code=404)
 
-# ▼ トップページ専用のOGP画像動的生成エンドポイント
 @app.get("/ogp.png")
 async def generate_top_ogp():
     W, H = 1200, 630
@@ -163,7 +165,7 @@ async def generate_ogp(game_id: int):
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
         if not game: raise HTTPException(status_code=404)
-        post = conn.execute('SELECT catchphrase, username FROM posts WHERE game_id = %s ORDER BY likes DESC, created_at DESC LIMIT 1', (game_id,)).fetchone()
+        post = conn.execute('SELECT catchphrase, username FROM posts WHERE game_id = %s ORDER BY (likes + wanna_play + agree) DESC, created_at DESC LIMIT 1', (game_id,)).fetchone()
 
     W, H = 1200, 630
     img = Image.new('RGB', (W, H), color='#0f172a')
@@ -303,8 +305,20 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .spoiler-toggle-btn.warning { color: var(--warning); border-color: rgba(245, 158, 11, 0.5); }
 .spoiler-toggle-btn.danger { color: var(--danger); border-color: rgba(239, 68, 68, 0.5); }
 .spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
-.btn-like { background: transparent; border: 1px solid var(--border); color: var(--text-main); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; }
-.btn-like.liked { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
+
+/* リアクションボタンのデザイン */
+.btn-react { background: transparent; border: 1px solid var(--border); color: var(--text-sub); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+.btn-react:hover { transform: translateY(-2px); border-color: #94a3b8; color: var(--text-main); }
+.btn-react span { background: rgba(255,255,255,0.05); padding: 0.1rem 0.5rem; border-radius: 12px; font-size: 0.8rem; }
+/* やってみる！ */
+.btn-react.reacted.btn-wanna-play { background: rgba(16, 185, 129, 0.1); border-color: var(--safe); color: var(--safe); }
+.btn-react.reacted.btn-wanna-play span { background: rgba(16, 185, 129, 0.2); }
+/* わかる */
+.btn-react.reacted.btn-agree { background: rgba(59, 130, 246, 0.1); border-color: #3b82f6; color: #3b82f6; }
+.btn-react.reacted.btn-agree span { background: rgba(59, 130, 246, 0.2); }
+/* いいね */
+.btn-react.reacted.btn-like { background: rgba(245, 158, 11, 0.1); border-color: var(--accent); color: var(--accent); }
+.btn-react.reacted.btn-like span { background: rgba(245, 158, 11, 0.2); }
 
 .discover-panel { background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; }
 .discover-panel h3 { margin-bottom: 0.9rem; color: var(--accent); }
@@ -380,14 +394,15 @@ function sharePost(btn, platform) {
     else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
 }
 
-async function likePost(gId, pId, btn) {
-    if (btn.classList.contains('liked')) return;
+async function reactPost(gId, pId, type, btn) {
+    if (btn.classList.contains('reacted')) return;
     try {
-        const res = await fetch(`/games/${gId}/posts/${pId}/like`, { method: 'POST' });
+        const res = await fetch(`/games/${gId}/posts/${pId}/react/${type}`, { method: 'POST' });
         if (res.ok) {
             const data = await res.json();
-            btn.querySelector('span').innerText = data.likes;
-            btn.classList.add('liked'); localStorage.setItem(`liked_${pId}`, 'true');
+            btn.querySelector('span').innerText = data.count;
+            btn.classList.add('reacted'); 
+            localStorage.setItem(`reacted_${type}_${pId}`, 'true');
         }
     } catch (e) {}
 }
@@ -492,7 +507,13 @@ function closeGachaModal() {
 
 document.addEventListener("DOMContentLoaded", () => {
     initGachaData();
-    document.querySelectorAll('.btn-like').forEach(b => { if (localStorage.getItem(`liked_${b.getAttribute('data-post-id')}`)) b.classList.add('liked'); });
+    // リアクションボタンの状態復元
+    document.querySelectorAll('.btn-react').forEach(b => { 
+        if (localStorage.getItem(`reacted_${b.dataset.type}_${b.dataset.postId}`)) {
+            b.classList.add('reacted'); 
+        }
+    });
+
     const imageUpload = document.getElementById('image_upload');
     if (imageUpload) {
         imageUpload.addEventListener('change', function(e) {
@@ -1016,7 +1037,7 @@ INDEX_HTML = """
                     </div>
                     <div>
                         <div style="font-weight: bold; color: var(--text-main); font-size: 0.95rem; margin-bottom: 0.2rem;">{{ item.title }}</div>
-                        <div style="font-size: 0.8rem; color: var(--accent);">👍 今週 {{ item.weekly_likes }} いいね</div>
+                        <div style="font-size: 0.8rem; color: var(--accent);">🔥 今週 {{ item.weekly_likes }} リアクション</div>
                     </div>
                 </div>
                 {% else %}<div style="color: var(--text-sub); font-size: 0.9rem;">今週の布教はまだありません。</div>{% endfor %}
@@ -1168,7 +1189,13 @@ GAME_HTML = """
 
                 <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
             </div>
-            <button type="button" class="btn-like" data-post-id="{{ post.id }}" onclick="likePost({{ game.id }}, {{ post.id }}, this)" style="flex-shrink: 0;">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
+            
+            <!-- ★ 新しいリアクションボタングループ -->
+            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0;">
+                <button type="button" class="btn-react btn-wanna-play" data-post-id="{{ post.id }}" data-type="wanna_play" onclick="reactPost({{ game.id }}, {{ post.id }}, 'wanna_play', this)">🎮 やってみる！ <span>{{ post.wanna_play | default(0) }}</span></button>
+                <button type="button" class="btn-react btn-agree" data-post-id="{{ post.id }}" data-type="agree" onclick="reactPost({{ game.id }}, {{ post.id }}, 'agree', this)">🤝 わかる <span>{{ post.agree | default(0) }}</span></button>
+                <button type="button" class="btn-react btn-like" data-post-id="{{ post.id }}" data-type="likes" onclick="reactPost({{ game.id }}, {{ post.id }}, 'likes', this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
+            </div>
         </div>
     </div>
     {% else %}<div class="card" style="text-align: center; color: var(--text-sub); padding: 3rem 0; background: transparent; border: 1px dashed var(--border);"><p style="margin: 0;">まだ布教コメントがありません。<br>最初の布教者になりませんか？</p></div>{% endfor %}
@@ -1178,6 +1205,13 @@ GAME_HTML = """
 MYPAGE_HTML = """
 <div class="card">
     <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">👤 マイページ</h2>
+    
+    <!-- ★ リアクション通知バナー -->
+    <div id="like-notification" style="display: none; background: rgba(16, 185, 129, 0.1); border: 1px solid var(--safe); color: var(--safe); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; justify-content: space-between; align-items: center;">
+        <div style="font-weight: bold;">🎉 あなたの布教に新しいリアクションがつきました！</div>
+        <button onclick="document.getElementById('like-notification').style.display='none'" style="background: transparent; border: none; color: var(--safe); font-size: 1.2rem; cursor: pointer;">✕</button>
+    </div>
+
     <h3 style="color: var(--accent); margin-top: 2rem;">🔖 お気に入りに追加したゲーム</h3>
     <div class="game-grid" style="margin-bottom: 3rem;">
         {% for game in bookmarked_games %}
@@ -1234,7 +1268,12 @@ MYPAGE_HTML = """
                         data-oshi="{{ post.oshi_points | default('') | escape }}" 
                         onclick="openPromoCard(this)">🎴 布教カード</button>
                 </div>
-                <div style="color: var(--text-sub); font-size: 0.9rem; font-weight: bold; flex-shrink: 0;">👍 いいね: {{ post.likes | default(0) }}</div>
+                <!-- ★ 獲得したリアクションの表示 -->
+                <div style="display: flex; gap: 0.8rem; color: var(--text-sub); font-size: 0.9rem; font-weight: bold; flex-shrink: 0;">
+                    <span style="color: var(--safe);">🎮 {{ post.wanna_play | default(0) }}</span>
+                    <span style="color: #3b82f6;">🤝 {{ post.agree | default(0) }}</span>
+                    <span style="color: var(--accent);">👍 {{ post.likes | default(0) }}</span>
+                </div>
             </div>
         </div>
         {% else %}
@@ -1242,6 +1281,22 @@ MYPAGE_HTML = """
         {% endfor %}
     </div>
 </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const currentLikes = {{ total_likes | default(0) }};
+    const savedLikes = localStorage.getItem("oshi_ge_last_likes");
+    
+    if (savedLikes !== null) {
+        const lastSeenLikes = parseInt(savedLikes, 10);
+        if (currentLikes > lastSeenLikes) {
+            const notif = document.getElementById("like-notification");
+            if (notif) notif.style.display = "flex";
+        }
+    }
+    localStorage.setItem("oshi_ge_last_likes", currentLikes);
+});
+</script>
 """
 
 NEW_GAME_HTML = """
@@ -1381,7 +1436,8 @@ async def read_root(request: Request, q: str = "", genre: str = "", platform: st
     
     with get_db_connection() as conn:
         games = conn.execute(query + f" ORDER BY {order_clause}", params).fetchall()
-        weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
+        # ★ 全リアクションの合計値でランキング化
+        weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(p.likes + p.wanna_play + p.agree), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
         requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
         
     return render_page(request, INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
@@ -1455,7 +1511,9 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
         if not game: raise HTTPException(status_code=404, detail="Game not found")
-        posts = conn.execute('SELECT * FROM posts WHERE game_id = %s ORDER BY ' + ('created_at DESC' if sort == 'new' else 'likes DESC, created_at DESC'), (game_id,)).fetchall()
+        # ★ 合計リアクション数でソート
+        order_str = 'created_at DESC' if sort == 'new' else '(likes + wanna_play + agree) DESC, created_at DESC'
+        posts = conn.execute(f'SELECT * FROM posts WHERE game_id = %s ORDER BY {order_str}', (game_id,)).fetchall()
     
     my_posts = [int(x) for x in request.cookies.get("my_posts", "").split(",") if x.isdigit()]
     bookmarks = [int(x) for x in request.cookies.get("bookmarks", "").split(",") if x.isdigit()]
@@ -1510,13 +1568,19 @@ async def report_post(post_id: int, reason: str = Form(...)):
         conn.commit()
     return JSONResponse({"status": "ok"})
 
-@app.post("/games/{game_id}/posts/{post_id}/like")
-async def like_post(game_id: int, post_id: int):
+# ★ 新しい統合リアクションエンドポイント
+@app.post("/games/{game_id}/posts/{post_id}/react/{react_type}")
+async def react_post(game_id: int, post_id: int, react_type: str):
+    valid_types = ["likes", "wanna_play", "agree"]
+    if react_type not in valid_types:
+        raise HTTPException(status_code=400)
+        
     with get_db_connection() as conn:
-        cursor = conn.execute('UPDATE posts SET likes = likes + 1 WHERE id = %s RETURNING likes', (post_id,))
-        likes = cursor.fetchone()["likes"]
+        # 動的カラム名は valid_types でバリデーション済みのため安全
+        cursor = conn.execute(f'UPDATE posts SET {react_type} = {react_type} + 1 WHERE id = %s RETURNING {react_type}', (post_id,))
+        count = cursor.fetchone()[react_type]
         conn.commit()
-    return {"likes": likes}
+    return {"count": count}
 
 @app.post("/games/{game_id}/bookmark")
 async def toggle_bookmark(request: Request, game_id: int):
@@ -1551,7 +1615,10 @@ async def mypage(request: Request):
         if bookmarks:
             bookmarked_games = conn.execute("SELECT * FROM games WHERE id = ANY(%s) ORDER BY created_at DESC", (bookmarks,)).fetchall()
             
-    return render_page(request, MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, page_title="マイページ - Oshi-Ge")
+    # ★ マイページのプチ通知も、全リアクションの合計値で判定するようにアップグレード
+    total_likes = sum(post.get("likes", 0) + post.get("wanna_play", 0) + post.get("agree", 0) for post in my_posts_list) if my_posts_list else 0
+            
+    return render_page(request, MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, total_likes=total_likes, page_title="マイページ - Oshi-Ge")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000)
