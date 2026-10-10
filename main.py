@@ -307,7 +307,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .spoiler-hidden-text { margin-top: 1rem; padding: 1.25rem; background: #1e293b; border-left: 4px solid var(--border); border-radius: 0 8px 8px 0; }
 
 /* リアクションボタンのデザイン */
-.btn-react { background: transparent; border: 1px solid var(--border); color: var(--text-sub); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; }
+.btn-react { background: transparent; border: 1px solid var(--border); color: var(--text-sub); padding: 0.4rem 0.8rem; border-radius: 20px; cursor: pointer; font-weight: bold; transition: 0.2s; display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; white-space: nowrap; }
 .btn-react:hover { transform: translateY(-2px); border-color: #94a3b8; color: var(--text-main); }
 .btn-react span { background: rgba(255,255,255,0.05); padding: 0.1rem 0.5rem; border-radius: 12px; font-size: 0.8rem; }
 /* やってみる！ */
@@ -340,6 +340,13 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
     .game-header-row { flex-direction: column; align-items: stretch !important; gap: 0.75rem !important; }
     .game-header-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
     .game-header-actions .btn-bookmark, .game-header-actions .btn { font-size: 0.8rem !important; padding: 0.4rem 0.6rem !important; }
+    
+    /* ▼ リアクションボタン＆シェアボタンのスマホ用レイアウト調整 ▼ */
+    .btn-react { flex: 1; justify-content: center; padding: 0.4rem 0.2rem; font-size: 0.75rem; gap: 0.2rem; }
+    .btn-react span { font-size: 0.7rem; padding: 0.1rem 0.3rem; }
+    /* 下部のアクションエリアを縦並びにして幅100%にする */
+    .post-card > div:last-child { flex-direction: column; align-items: stretch !important; gap: 1rem !important; }
+    .post-card > div:last-child > div { width: 100%; justify-content: space-between; }
 }
 
 .promo-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.78); display: flex; align-items: center; justify-content: center; padding: 1rem; z-index: 9999; }
