@@ -32,6 +32,7 @@ app = FastAPI()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
 SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24).hex())
 serializer = URLSafeSerializer(SECRET_KEY)
 
@@ -141,10 +142,16 @@ def init_db():
             conn.execute('''CREATE TABLE IF NOT EXISTS requests (
                 id SERIAL PRIMARY KEY, title TEXT NOT NULL, username TEXT NOT NULL, 
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-            for col in ["platform TEXT", "image_url TEXT", "developer_x_id TEXT DEFAULT ''"]:
-                conn.execute(f"ALTER TABLE games ADD COLUMN IF NOT EXISTS {col}")
-            for col in ["catchphrase TEXT", "target_audience TEXT", "play_time TEXT", "likes INTEGER DEFAULT 0", "oshi_points TEXT DEFAULT ''", "wanna_play INTEGER DEFAULT 0", "agree INTEGER DEFAULT 0"]:
-                conn.execute(f"ALTER TABLE posts ADD COLUMN IF NOT EXISTS {col}")
+            conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
+            conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
+            conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS developer_x_id TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS target_audience TEXT")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS play_time TEXT")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS likes INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS oshi_points TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS wanna_play INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS agree INTEGER DEFAULT 0")
             conn.commit()
     except Exception:
         logger.exception("init_db failed")
@@ -165,42 +172,31 @@ def init_db():
 
 init_db()
 
-ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
-
-def is_allowed_image_url(url: str) -> bool:
-    try:
-        if not SUPABASE_URL or not url:
-            return False
-        p = urlparse(url)
-        s = urlparse(SUPABASE_URL)
-        return (
-            p.scheme == "https"
-            and p.hostname == s.hostname
-            and p.path.startswith("/storage/v1/object/public/games/")
-        )
-    except Exception:
-        return False
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):
-        return None
-
-_opener = urllib.request.build_opener(_NoRedirect)
-
+# ---------------------------------------------------------------------------
+# 画像まわり (SSRF対策の最適化)
+# ---------------------------------------------------------------------------
 def fetch_image_bytes(url: str, limit: int = 5_000_000):
-    if not is_allowed_image_url(url):
-        return None, None
     try:
+        p = urlparse(url)
+        # file://などの不正プロトコルをブロック
+        if p.scheme not in ("http", "https"):
+            return None, None
+            
+        # SSRF対策: クラウドのメタデータやローカルIPへのアクセスを厳格に禁止
+        if p.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254", "metadata.google.internal"):
+            return None, None
+        if p.hostname and (p.hostname.startswith("192.168.") or p.hostname.startswith("10.")):
+            return None, None
+            
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with _opener.open(req, timeout=8) as r:
-            ct = (r.headers.get('Content-Type') or '').split(';')[0].strip().lower()
-            if ct not in ALLOWED_IMAGE_TYPES:
-                return None, None
+        with urllib.request.urlopen(req, timeout=8) as r:
+            ct = r.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip().lower()
             data = r.read(limit + 1)
             if len(data) > limit:
                 return None, None
             return data, ct
     except Exception:
+        logger.warning("fetch_image_bytes failed: %s", url)
         return None, None
 
 def process_image(base64_data: str):
@@ -705,76 +701,6 @@ async function drawPromoCard() {
     if (contentRaw) {
         const contentLines = getLines('「' + contentRaw.trim() + '」', 920, '400 30px "Noto Sans JP", sans-serif', 4);
         simY += contentLines * 45 + 40;
-    }
-
-    if (target) {
-        simY += 35 + 35 + 60;
-    }
-
-    const tags = [];
-    if(playTime) tags.push(playTime);
-    if(genre) tags.push(genre);
-    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
-    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
-    if(tags.length) { simY += 42 + 40; }
-
-    const panelH = simY - panelY + 20;
-    const H = Math.max(1350, panelY + panelH + 100);
-    
-    canvas.width = W; canvas.height = H;
-
-    const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-
-    if (img) {
-        ctx.drawImage(img, 0, 0, W, drawH);
-        const fadeStart = Math.max(0, drawH - 250);
-        const fade = ctx.createLinearGradient(0, fadeStart, 0, drawH);
-        fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(1, '#020617');
-        ctx.fillStyle = fade; ctx.fillRect(0, fadeStart, W, drawH - fadeStart);
-        if (drawH < H) {
-            ctx.fillStyle = '#020617';
-            ctx.fillRect(0, drawH, W, H - drawH);
-        }
-    } else {
-        const glow = ctx.createRadialGradient(W/2, 300, 50, W/2, 300, 600);
-        glow.addColorStop(0, 'rgba(245,158,11,0.2)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
-        ctx.fillStyle = glow; ctx.fillRect(0, 0, W, 900);
-    }
-
-    ctx.fillStyle = '#f59e0b'; ctx.fillRect(0, 40, 12, 50);
-    ctx.font = '900 36px "Noto Sans JP", sans-serif'; ctx.fillText('OSHI-GE', 40, 78);
-
-    let badgeText = '🟢 ネタバレなし'; let badgeColor = '#10b981'; let badgeBg = 'rgba(16, 185, 129, 0.2)';
-    if (spoiler === 1) { badgeText = '🟡 軽微なネタバレあり'; badgeColor = '#f59e0b'; badgeBg = 'rgba(245, 158, 11, 0.2)'; }
-    if (spoiler === 2) { badgeText = '🔴 ネタバレあり'; badgeColor = '#ef4444'; badgeBg = 'rgba(239, 68, 68, 0.2)'; }
-    ctx.font = '900 24px "Noto Sans JP", sans-serif';
-    const bw = ctx.measureText(badgeText).width + 40;
-    drawRoundRect(ctx, W - bw - 40, 40, bw, 50, 25);
-    ctx.fillStyle = badgeBg; ctx.fill();
-    ctx.strokeStyle = badgeColor; ctx.lineWidth = 2; ctx.stroke();
-    ctx.fillStyle = badgeColor; ctx.fillText(badgeText, W - bw - 20, 73);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 15;
-    ctx.font = '900 65px "Noto Sans JP", sans-serif';
-    wrapCanvasText(ctx, catchphrase, 50, catchY, 980, 85, 3);
-    ctx.shadowBlur = 0;
-
-    drawRoundRect(ctx, 40, panelY, 1000, panelH, 20);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
-
-    let currentY = panelY + 70;
-    ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
-    const drawnTitleLines = wrapCanvasText(ctx, title, 80, currentY, 920, 55, 2);
-    currentY += drawnTitleLines * 55 + 30;
-
-    if (contentRaw) {
-        ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
-        const drawnContentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, currentY, 920, 45, 4);
-        currentY += drawnContentLines * 45 + 40;
     }
 
     if (target) {
