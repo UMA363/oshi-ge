@@ -4,3 +4,5 @@ jinja2
 psycopg
 python-multipart
 Pillow
+itsdangerous
+markupsafe
