@@ -172,17 +172,14 @@ def init_db():
 
 init_db()
 
-# ---------------------------------------------------------------------------
-# 画像まわり (SSRF対策の最適化)
-# ---------------------------------------------------------------------------
+ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+
 def fetch_image_bytes(url: str, limit: int = 5_000_000):
     try:
         p = urlparse(url)
-        # file://などの不正プロトコルをブロック
         if p.scheme not in ("http", "https"):
             return None, None
             
-        # SSRF対策: クラウドのメタデータやローカルIPへのアクセスを厳格に禁止
         if p.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254", "metadata.google.internal"):
             return None, None
         if p.hostname and (p.hostname.startswith("192.168.") or p.hostname.startswith("10.")):
@@ -705,6 +702,75 @@ async function drawPromoCard() {
 
     if (target) {
         simY += 35 + 35 + 60;
+    }
+
+    const tags = [];
+    if(playTime) tags.push(playTime);
+    if(genre) tags.push(genre);
+    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
+    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
+    if(tags.length) { simY += 42 + 40; }
+
+    const panelH = simY - panelY + 20;
+    const H = Math.max(1350, panelY + panelH + 100);
+    
+    canvas.width = W; canvas.height = H;
+
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+    if (img) {
+        ctx.drawImage(img, 0, 0, W, drawH);
+        const fadeStart = Math.max(0, drawH - 250);
+        const fade = ctx.createLinearGradient(0, fadeStart, 0, drawH);
+        fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(1, '#020617');
+        ctx.fillStyle = fade; ctx.fillRect(0, fadeStart, W, drawH - fadeStart);
+        if (drawH < H) {
+            ctx.fillStyle = '#020617';
+            ctx.fillRect(0, drawH, W, H - drawH);
+        }
+    } else {
+        const glow = ctx.createRadialGradient(W/2, 300, 50, W/2, 300, 600);
+        glow.addColorStop(0, 'rgba(245,158,11,0.2)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
+        ctx.fillStyle = glow; ctx.fillRect(0, 0, W, 900);
+    }
+
+    ctx.fillStyle = '#f59e0b'; ctx.fillRect(0, 40, 12, 50);
+    ctx.font = '900 36px "Noto Sans JP", sans-serif'; ctx.fillText('OSHI-GE', 40, 78);
+
+    let badgeText = '🟢 ネタバレなし'; let badgeColor = '#10b981'; let badgeBg = 'rgba(16, 185, 129, 0.2)';
+    if (spoiler === 1) { badgeText = '🟡 軽微なネタバレあり'; badgeColor = '#f59e0b'; badgeBg = 'rgba(245, 158, 11, 0.2)'; }
+    if (spoiler === 2) { badgeText = '🔴 ネタバレあり'; badgeColor = '#ef4444'; badgeBg = 'rgba(239, 68, 68, 0.2)'; }
+    ctx.font = '900 24px "Noto Sans JP", sans-serif';
+    const bw = ctx.measureText(badgeText).width + 40;
+    drawRoundRect(ctx, W - bw - 40, 40, bw, 50, 25);
+    ctx.fillStyle = badgeBg; ctx.fill();
+    ctx.strokeStyle = badgeColor; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = badgeColor; ctx.fillText(badgeText, W - bw - 20, 73);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 15;
+    ctx.font = '900 65px "Noto Sans JP", sans-serif';
+    wrapCanvasText(ctx, catchphrase, 50, catchY, 980, 85, 3);
+    ctx.shadowBlur = 0;
+
+    drawRoundRect(ctx, 40, panelY, 1000, panelH, 20);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
+
+    let currentY = panelY + 70;
+    ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
+    const drawnTitleLines = wrapCanvasText(ctx, title, 80, currentY, 920, 55, 2);
+    currentY += drawnTitleLines * 55 + 30;
+
+    if (contentRaw) {
+        ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
+        const drawnContentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, currentY, 920, 45, 4);
+        currentY += drawnContentLines * 45 + 40;
+    }
+
+    if (target) {
         ctx.fillStyle = '#94a3b8'; ctx.font = '700 22px "Noto Sans JP", sans-serif';
         ctx.fillText('👤 こんな人におすすめ', 80, currentY);
         currentY += 35;
@@ -1165,20 +1231,20 @@ GAME_HTML = """
                 <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ game.developer_x_id }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                 
                 <button type="button" class="btn btn-outline btn-small" 
-                    data-id="{{ game.id | escape }}"
-                    data-postid="{{ post.id | escape }}"
-                    data-title="{{ game.title | escape }}" 
-                    data-catch="{{ post.catchphrase | escape }}" 
-                    data-target="{{ post.target_audience | escape }}" 
-                    data-play="{{ post.play_time | escape }}" 
-                    data-user="{{ (post.username or '名無しの布教者') | escape }}" 
-                    data-genre="{{ game.genre | escape }}" 
-                    data-platform="{{ game.platform | escape }}" 
-                    data-spoiler="{{ post.spoiler_level | escape }}" 
-                    data-content="{{ (post.content or '') | replace('\n', ' ') | replace('\r', '') | escape }}" 
-                    data-img="{{ game.image_url | escape }}" 
-                    data-oshi="{{ post.oshi_points | escape }}" 
-                    data-dev="{{ game.developer_x_id | escape }}" 
+                    data-id="{{ game.id }}"
+                    data-postid="{{ post.id }}"
+                    data-title="{{ game.title }}" 
+                    data-catch="{{ post.catchphrase }}" 
+                    data-target="{{ post.target_audience }}" 
+                    data-play="{{ post.play_time }}" 
+                    data-user="{{ post.username or '名無しの布教者' }}" 
+                    data-genre="{{ game.genre }}" 
+                    data-platform="{{ game.platform }}" 
+                    data-spoiler="{{ post.spoiler_level }}" 
+                    data-content="{{ (post.content or '') | replace('\n', ' ') | replace('\r', '') }}" 
+                    data-img="{{ game.image_url }}" 
+                    data-oshi="{{ post.oshi_points }}" 
+                    data-dev="{{ game.developer_x_id }}" 
                     onclick="openPromoCard(this)">🎴 布教カード</button>
 
                 <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
@@ -1245,20 +1311,20 @@ MYPAGE_HTML = """
                     <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ post.game_developer_x_id }}" onclick="sharePost(this, 'line')">LINE で共有</button>
                     
                     <button type="button" class="btn btn-outline btn-small" 
-                        data-id="{{ post.game_id | escape }}"
-                        data-postid="{{ post.id | escape }}"
-                        data-title="{{ post.game_title | escape }}" 
-                        data-catch="{{ post.catchphrase | escape }}" 
-                        data-target="{{ post.target_audience | escape }}" 
-                        data-play="{{ post.play_time | escape }}" 
-                        data-user="{{ (post.username or '名無しの布教者') | escape }}" 
-                        data-genre="{{ post.game_genre | escape }}" 
-                        data-platform="{{ post.game_platform | escape }}" 
-                        data-spoiler="{{ post.spoiler_level | escape }}" 
-                        data-content="{{ (post.content or '') | replace('\n', ' ') | replace('\r', '') | escape }}" 
-                        data-img="{{ post.game_image_url | escape }}" 
-                        data-oshi="{{ post.oshi_points | escape }}" 
-                        data-dev="{{ post.game_developer_x_id | escape }}" 
+                        data-id="{{ post.game_id }}"
+                        data-postid="{{ post.id }}"
+                        data-title="{{ post.game_title }}" 
+                        data-catch="{{ post.catchphrase }}" 
+                        data-target="{{ post.target_audience }}" 
+                        data-play="{{ post.play_time }}" 
+                        data-user="{{ post.username or '名無しの布教者' }}" 
+                        data-genre="{{ post.game_genre }}" 
+                        data-platform="{{ post.game_platform }}" 
+                        data-spoiler="{{ post.spoiler_level }}" 
+                        data-content="{{ (post.content or '') | replace('\n', ' ') | replace('\r', '') }}" 
+                        data-img="{{ post.game_image_url }}" 
+                        data-oshi="{{ post.oshi_points }}" 
+                        data-dev="{{ post.game_developer_x_id }}" 
                         onclick="openPromoCard(this)">🎴 布教カード</button>
                 </div>
                 <div style="display: flex; gap: 0.8rem; color: var(--text-sub); font-size: 0.9rem; font-weight: bold; flex-shrink: 0;">
