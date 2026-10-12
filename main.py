@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import List
 from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from jinja2 import Environment, select_autoescape
+from jinja2 import Environment
 from markupsafe import Markup
 from itsdangerous import URLSafeSerializer
 import psycopg
@@ -22,7 +22,6 @@ app = FastAPI()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-# Cookie改ざん防止用のシークレットキー（環境変数がなければランダム生成）
 SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24).hex())
 serializer = URLSafeSerializer(SECRET_KEY)
 
@@ -45,7 +44,9 @@ POST_COOLDOWN = 30
 ip_last_post_time = defaultdict(float)
 
 def check_rate_limit(request: Request) -> bool:
-    client_ip = request.headers.get("X-Forwarded-For", request.client.host).split(",")[0].strip()
+    # クラッシュ防止：request.clientがNoneの場合の安全対策
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    client_ip = request.headers.get("X-Forwarded-For", client_ip).split(",")[0].strip()
     current_time = time.time()
     if current_time - ip_last_post_time[client_ip] < POST_COOLDOWN:
         return False
@@ -91,18 +92,16 @@ def init_db():
             conn.execute('''CREATE TABLE IF NOT EXISTS requests (
                 id SERIAL PRIMARY KEY, title TEXT NOT NULL, username TEXT NOT NULL, 
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-            # 必要なカラムの追加
             for col in ["platform TEXT", "image_url TEXT", "developer_x_id TEXT DEFAULT ''"]:
                 conn.execute(f"ALTER TABLE games ADD COLUMN IF NOT EXISTS {col}")
             for col in ["catchphrase TEXT", "target_audience TEXT", "play_time TEXT", "likes INTEGER DEFAULT 0", "oshi_points TEXT DEFAULT ''", "wanna_play INTEGER DEFAULT 0", "agree INTEGER DEFAULT 0"]:
                 conn.execute(f"ALTER TABLE posts ADD COLUMN IF NOT EXISTS {col}")
             conn.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"DB INIT ERROR: {e}")
 
 init_db()
 
-# Cookie操作の安全化（署名付き）
 def get_secure_cookie_list(request: Request, key: str) -> List[int]:
     val = request.cookies.get(key)
     if not val: return []
@@ -113,7 +112,6 @@ def get_secure_cookie_list(request: Request, key: str) -> List[int]:
 
 def set_secure_cookie_list(res: Response, key: str, data: List[int]):
     res.set_cookie(key=key, value=serializer.dumps(data), max_age=60*60*24*365, httponly=True, samesite="lax")
-
 
 @app.get("/robots.txt", response_class=Response)
 def robots_txt(request: Request):
@@ -144,7 +142,6 @@ def sitemap_xml(request: Request):
 
 @app.get("/proxy-image")
 def proxy_image(url: str):
-    # SSRF対策：許可されたホスト（Supabase）のみアクセス可能にする
     parsed = urlparse(url)
     allowed_host = urlparse(SUPABASE_URL).hostname if SUPABASE_URL else None
     if parsed.scheme != "https" or parsed.hostname != allowed_host:
@@ -152,7 +149,7 @@ def proxy_image(url: str):
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as response:
-            data = response.read(5000000) # 5MB制限
+            data = response.read(5000000)
             content_type = response.headers.get('Content-Type', 'image/jpeg')
             return Response(content=data, media_type=content_type)
     except Exception:
@@ -177,7 +174,6 @@ def generate_top_ogp():
 
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
-    # キャッシュヘッダを追加
     return Response(content=img_byte_arr.getvalue(), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 @app.get("/games/{game_id}/ogp.png")
@@ -382,9 +378,7 @@ function toggleSpoiler(btn) {
     }
 }
 
-function shareGameToX(btn) { 
-    const title = btn.dataset.title;
-    const devId = btn.dataset.dev;
+function shareGameToX(title, devId) { 
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
     let mentions = "@horse_123123";
     if (devId && devId.trim()) {
@@ -396,8 +390,7 @@ function shareGameToX(btn) {
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
-function shareGameToLine(btn) { 
-    const title = btn.dataset.title;
+function shareGameToLine(title) { 
     window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
@@ -871,17 +864,14 @@ function sharePromoCardToX() {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePromoCard(); });
 """
 
-# Jinja2環境の設定（自動エスケープを有効化しXSSを防止）
-env = Environment(autoescape=select_autoescape(['html', 'xml']))
+env = Environment(autoescape=True)
 
 def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
-    # None表示バグを防ぐため、kwargs内のNoneを空文字に置換
     safe_kwargs = {k: (v if v is not None else "") for k, v in kwargs.items()}
     content_html = env.from_string(content_template_str).render(request=request, **safe_kwargs)
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
     final_desc = og_description if og_description else "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。"
     
-    # テンプレートに変数を埋め込む際、Markupを使って二重エスケープを防ぐ
     return HTMLResponse(env.from_string(BASE_HTML).render(
         request=request, css=Markup(CSS), js=Markup(JS), content=Markup(content_html), is_top=is_top, 
         page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema, **safe_kwargs
@@ -973,8 +963,6 @@ def create_game(
         conn.commit()
     
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
-    
-    # 署名付きCookieに更新
     my_posts = get_secure_cookie_list(request, "my_posts")
     my_posts.append(post_id)
     set_secure_cookie_list(res, "my_posts", my_posts)
@@ -993,7 +981,6 @@ def update_game(request: Request, game_id: int, title: str = Form(...), descript
         return HTMLResponse("<script>alert('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。');history.back();</script>")
 
     with get_db_connection() as conn:
-        # existing_image_url は信用せず、必ずDBの現在値を取得する
         game = conn.execute('SELECT image_url FROM games WHERE id = %s', (game_id,)).fetchone()
         if not game: raise HTTPException(status_code=404)
         
@@ -1034,7 +1021,6 @@ def create_post(request: Request, game_id: int, username: str = Form(...), catch
     
     points_str = ",".join(oshi_points)
     with get_db_connection() as conn:
-        # game_idの存在確認
         if not conn.execute('SELECT id FROM games WHERE id = %s', (game_id,)).fetchone():
             raise HTTPException(status_code=404, detail="Game not found")
 
@@ -1098,7 +1084,6 @@ def react_post(game_id: int, post_id: int, react_type: str):
         raise HTTPException(status_code=400)
         
     with get_db_connection() as conn:
-        # game_idとpost_idの整合性確認
         if not conn.execute('SELECT id FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone():
             raise HTTPException(status_code=404)
             
