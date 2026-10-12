@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from jinja2 import Environment
 from markupsafe import Markup
+from itsdangerous import URLSafeSerializer
 from PIL import Image, ImageDraw, ImageFont
 
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,10 @@ app = FastAPI()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+
+# 🔒 Geminiが実装したCookie暗号化キー（他人の投稿の改ざんを防止）
+SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24).hex())
+serializer = URLSafeSerializer(SECRET_KEY)
 
 FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
 FONT_PATH = "NotoSansCJKjp-Bold.otf"
@@ -59,11 +64,9 @@ download_font()
 # ---------------------------------------------------------------------------
 env = Environment(autoescape=True, finalize=lambda x: "" if x is None else x)
 
-
 @lru_cache(maxsize=None)
 def get_template(source: str):
     return env.from_string(source)
-
 
 # ---------------------------------------------------------------------------
 # レート制限
@@ -71,35 +74,27 @@ def get_template(source: str):
 POST_COOLDOWN = 30
 ip_last_post_time = defaultdict(float)
 
-
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("X-Forwarded-For")
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
-
 def check_rate_limit(request: Request) -> bool:
-    """クールダウン中なら False。ここでは時刻を消費しない。"""
     last = ip_last_post_time.get(get_client_ip(request), 0.0)
     return time.time() - last >= POST_COOLDOWN
 
-
 def mark_posted(request: Request):
-    """投稿が成功した後に呼ぶ。"""
     now = time.time()
     ip_last_post_time[get_client_ip(request)] = now
     if len(ip_last_post_time) > 10000:
-        for k in [k for k, v in ip_last_post_time.items() if now - v > POST_COOLDOWN]:
+        for k in [k for k, v in list(ip_last_post_time.items()) if now - v > POST_COOLDOWN]:
             ip_last_post_time.pop(k, None)
-
 
 RATE_LIMIT_HTML = "<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>"
 
-
 def alert_back(msg: str) -> HTMLResponse:
     return HTMLResponse(f"<script>alert('{msg}');history.back();</script>")
-
 
 # ---------------------------------------------------------------------------
 # 入力の整形
@@ -107,48 +102,45 @@ def alert_back(msg: str) -> HTMLResponse:
 def clip(s, n: int) -> str:
     return (s or "").strip()[:n]
 
-
 def clean_genre(g: str) -> str:
     return g if g in GENRES else "その他 / 不明"
-
 
 def clean_platform(p: str) -> str:
     items = [x.strip() for x in (p or "").split(",")]
     return ",".join([x for x in items if x in PLATFORMS])
 
-
 def clean_points(points: List[str]) -> str:
     return ",".join([x for x in points if x in OSHI_POINTS])
-
 
 def clean_x_id(s: str) -> str:
     return re.sub(r'[^A-Za-z0-9_@]', '', s or '')[:20]
 
-
 def clamp_spoiler(n: int) -> int:
     return max(0, min(2, n))
-
 
 def get_base_url(request: Request) -> str:
     host = request.headers.get("host", "")
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     return f"{scheme}://{host}" if host else ""
 
-
+# 🔒 Cookieの安全な読み書き（Gemini実装の署名暗号化を適用）
 def parse_id_cookie(request: Request, name: str) -> List[int]:
-    return [int(x) for x in request.cookies.get(name, "").split(",") if x.isdigit()]
+    val = request.cookies.get(name)
+    if not val: return []
+    try:
+        return serializer.loads(val)
+    except:
+        return []
 
-
-def set_cookie_safe(res, key: str, value: str):
-    res.set_cookie(key=key, value=value, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax")
-
+def set_cookie_safe(res: Response, key: str, values: List[int]):
+    signed_val = serializer.dumps(values)
+    res.set_cookie(key=key, value=signed_val, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax")
 
 # ---------------------------------------------------------------------------
 # DB
 # ---------------------------------------------------------------------------
 def get_db_connection():
     return psycopg.connect(DATABASE_URL, row_factory=dict_row, sslmode="require")
-
 
 def init_db():
     try:
@@ -180,7 +172,6 @@ def init_db():
     except Exception:
         logger.exception("init_db failed")
 
-    # インデックス(データは変更しない。失敗しても他に影響しないよう別接続で実行)
     try:
         with get_db_connection() as conn:
             conn.execute("CREATE INDEX IF NOT EXISTS posts_game_id_idx ON posts (game_id)")
@@ -188,14 +179,12 @@ def init_db():
     except Exception:
         logger.exception("create posts_game_id_idx failed")
 
-    # タイトル重複(大文字小文字無視)の UNIQUE。既に重複データがあると失敗するが、ログに出るだけで動作は続く
     try:
         with get_db_connection() as conn:
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS games_title_lower_uq ON games (LOWER(title))")
             conn.commit()
     except Exception:
-        logger.exception("create games_title_lower_uq failed (既存データに重複タイトルがある可能性)")
-
+        logger.exception("create games_title_lower_uq failed")
 
 init_db()
 
@@ -204,9 +193,7 @@ init_db()
 # ---------------------------------------------------------------------------
 ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
 
-
 def is_allowed_image_url(url: str) -> bool:
-    """自分の Supabase 公開バケットの画像だけ許可する。"""
     try:
         if not SUPABASE_URL or not url:
             return False
@@ -220,17 +207,13 @@ def is_allowed_image_url(url: str) -> bool:
     except Exception:
         return False
 
-
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
 
-
 _opener = urllib.request.build_opener(_NoRedirect)
 
-
 def fetch_image_bytes(url: str, limit: int = 5_000_000):
-    """許可されたURLだけ取得。(data, content_type) か (None, None)。"""
     if not is_allowed_image_url(url):
         return None, None
     try:
@@ -247,9 +230,7 @@ def fetch_image_bytes(url: str, limit: int = 5_000_000):
         logger.warning("fetch_image_bytes failed: %s", url)
         return None, None
 
-
 def process_image(base64_data: str):
-    """Pillow で中身を検証し、WebP(不可ならJPEG)に再エンコードする。"""
     _, encoded = base64_data.split(",", 1)
     raw = base64.b64decode(encoded)
     img = Image.open(io.BytesIO(raw))
@@ -266,7 +247,6 @@ def process_image(base64_data: str):
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=85)
         return buf.getvalue(), "jpg", "image/jpeg"
-
 
 def upload_image_to_supabase(base64_data: str) -> str:
     if not base64_data or not SUPABASE_URL or not SUPABASE_KEY:
@@ -288,154 +268,9 @@ def upload_image_to_supabase(base64_data: str) -> str:
         logger.exception("image upload failed")
         return ""
 
-
 # ---------------------------------------------------------------------------
-# robots / sitemap
+# HTML, CSS, JS テンプレート定数
 # ---------------------------------------------------------------------------
-@app.get("/robots.txt", response_class=Response)
-def robots_txt(request: Request):
-    base_url = get_base_url(request)
-    content = f"User-agent: *\nAllow: /\nSitemap: {base_url}/sitemap.xml"
-    return Response(content=content, media_type="text/plain")
-
-
-@app.get("/sitemap.xml", response_class=Response)
-def sitemap_xml(request: Request):
-    base_url = get_base_url(request)
-
-    with get_db_connection() as conn:
-        games = conn.execute('SELECT id, created_at FROM games ORDER BY created_at DESC').fetchall()
-
-    xml = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
-    xml.append(f'<url><loc>{base_url}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>')
-
-    for g in games:
-        lastmod = g['created_at'].strftime("%Y-%m-%d") if g['created_at'] else ""
-        xml.append(f'<url><loc>{base_url}/games/{g["id"]}</loc><lastmod>{lastmod}</lastmod><changefreq>weekly</changefreq><priority>0.8</priority></url>')
-
-    xml.append('</urlset>')
-    return Response(content="\n".join(xml), media_type="application/xml")
-
-
-@app.get("/proxy-image")
-def proxy_image(url: str):
-    data, ct = fetch_image_bytes(url)
-    if data is None:
-        raise HTTPException(status_code=404)
-    return Response(
-        content=data,
-        media_type=ct,
-        headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"},
-    )
-
-
-# ---------------------------------------------------------------------------
-# OGP 画像
-# ---------------------------------------------------------------------------
-@app.get("/ogp.png")
-def generate_top_ogp():
-    W, H = 1200, 630
-    img = Image.new('RGB', (W, H), color='#0f172a')
-    draw = ImageDraw.Draw(img)
-    try:
-        font_title = ImageFont.truetype(FONT_PATH, 64)
-        font_sub = ImageFont.truetype(FONT_PATH, 32)
-    except Exception:
-        font_title = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
-
-    draw.rectangle([(0, 0), (20, H)], fill="#f59e0b")
-    draw.text((80, 160), "Oshi-Ge", font=font_title, fill="#f59e0b")
-    draw.text((80, 260), "誰かの人生を変える1本を。", font=font_title, fill="#ffffff")
-    draw.text((80, 360), "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ", font=font_sub, fill="#94a3b8")
-
-    img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='PNG')
-    return Response(content=img_byte_arr.getvalue(), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
-
-
-@app.get("/games/{game_id}/ogp.png")
-def generate_ogp(game_id: int):
-    with get_db_connection() as conn:
-        game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
-        if not game:
-            raise HTTPException(status_code=404)
-        post = conn.execute('SELECT catchphrase, username FROM posts WHERE game_id = %s ORDER BY (COALESCE(likes,0) + COALESCE(wanna_play,0) + COALESCE(agree,0)) DESC, created_at DESC LIMIT 1', (game_id,)).fetchone()
-
-    W, H = 1200, 630
-    img = Image.new('RGB', (W, H), color='#0f172a')
-
-    if game.get("image_url"):
-        try:
-            bg_data, _ = fetch_image_bytes(game["image_url"])
-            if bg_data:
-                bg_img = Image.open(io.BytesIO(bg_data)).convert("RGBA")
-                bg_ratio = bg_img.width / bg_img.height
-                target_ratio = W / H
-                if bg_ratio > target_ratio:
-                    new_w = int(bg_img.height * target_ratio)
-                    offset = (bg_img.width - new_w) // 2
-                    bg_img = bg_img.crop((offset, 0, offset + new_w, bg_img.height))
-                else:
-                    new_h = int(bg_img.width / target_ratio)
-                    offset = (bg_img.height - new_h) // 2
-                    bg_img = bg_img.crop((0, offset, bg_img.width, offset + new_h))
-                bg_img = bg_img.resize((W, H))
-                overlay = Image.new('RGBA', (W, H), color=(15, 23, 42, 200))
-                bg_img = Image.alpha_composite(bg_img, overlay)
-                img.paste(bg_img.convert('RGB'), (0, 0))
-        except Exception:
-            logger.exception("ogp background failed")
-
-    draw = ImageDraw.Draw(img)
-    try:
-        font_title = ImageFont.truetype(FONT_PATH, 56)
-        font_catch = ImageFont.truetype(FONT_PATH, 46)
-        font_brand = ImageFont.truetype(FONT_PATH, 32)
-    except Exception:
-        font_title = ImageFont.load_default()
-        font_catch = ImageFont.load_default()
-        font_brand = ImageFont.load_default()
-
-    draw.rectangle([(0, 0), (16, H)], fill="#f59e0b")
-    draw.text((60, 40), "Oshi-Ge", font=font_brand, fill="#f59e0b")
-
-    title_text = game['title'] or ""
-    if draw.textlength(title_text, font=font_title) > 1080:
-        while len(title_text) > 1 and draw.textlength(title_text + "…", font=font_title) > 1080:
-            title_text = title_text[:-1]
-        title_text += "…"
-    draw.text((60, 130), title_text, font=font_title, fill="#ffffff")
-    draw.line([(60, 210), (1140, 210)], fill="#334155", width=2)
-
-    if post and post['catchphrase']:
-        catch_text = f"「{post['catchphrase']}」"
-        chars = list(catch_text)
-        line = ""
-        lines = []
-        for ch in chars:
-            if draw.textlength(line + ch, font=font_catch) > 1050:
-                lines.append(line)
-                line = ch
-            else:
-                line += ch
-        if line:
-            lines.append(line)
-
-        y_text = 270
-        for l in lines[:3]:
-            draw.text((60, y_text), l, font=font_catch, fill="#fcd34d")
-            y_text += 65
-
-        author_text = f"布教者: {post['username']}"
-        draw.text((60, H - 80), author_text, font=font_brand, fill="#94a3b8")
-    else:
-        draw.text((60, 270), "まだ布教コメントがありません。\n最初の布教者になりませんか？", font=font_catch, fill="#94a3b8")
-
-    img_byte_arr = io.BytesIO()
-    img.save(img_byte_arr, format='PNG')
-    return Response(content=img_byte_arr.getvalue(), media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
-
 
 CSS = """
 :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
@@ -551,7 +386,7 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .cropper-view-box, .cropper-face { border-radius: 4px; }
 """
 
-JS = """
+JS = r"""
 function toggleSpoiler(btn) {
     const txt = btn.nextElementSibling;
     if (txt.style.display === "none") { txt.style.display = "block"; btn.style.opacity = "0.7"; btn.innerText = "クリックして閉じる"; } 
@@ -563,19 +398,19 @@ function toggleSpoiler(btn) {
 }
 
 function shareGameToX(title, devId) { 
-    const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
+    const cleanTitleTag = '#' + title.replace(/[\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
     let mentions = "@horse_123123";
     if (devId && devId.trim()) {
         let cleanDevId = devId.trim();
         if (!cleanDevId.startsWith('@')) cleanDevId = '@' + cleanDevId;
         mentions += ' ' + cleanDevId;
     }
-    const text = `次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n\\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}\\n`;
+    const text = `次に遊ぶ神ゲーを探している方へ🎮\n『${title}』のおすすめ布教ページです！👇\n\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}\n`;
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
 function shareGameToLine(title) { 
-    window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); 
+    window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\n『${title}』のおすすめ布教ページです！👇\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
 function sharePost(btn, platform) {
@@ -587,16 +422,16 @@ function sharePost(btn, platform) {
     const devId = btn.dataset.dev || '';
     const url = window.location.origin + '/games/' + gameId;
     
-    const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
+    const cleanTitleTag = '#' + title.replace(/[\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
     
-    let text = `このゲーム、もっと知られてほしい。\\n\\n🎮 『${title}』`;
-    if (catchphrase) text += `\\n\\n「${catchphrase}」`;
+    let text = `このゲーム、もっと知られてほしい。\n\n🎮 『${title}』`;
+    if (catchphrase) text += `\n\n「${catchphrase}」`;
     if (spoilerLevel === 0 && content.trim()) {
         let impression = content.trim();
         if (Array.from(impression).length > 20) impression = Array.from(impression).slice(0, 20).join('') + '…';
-        text += `\\n\\n💬「${impression}」`;
-    } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
-    else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
+        text += `\n\n💬「${impression}」`;
+    } else if (spoilerLevel === 1) text += `\n\n🔒 軽微なネタバレを含みます`;
+    else if (spoilerLevel === 2) text += `\n\n⚠️ ネタバレあり`;
     
     let mentions = "@horse_123123";
     if (devId.trim()) {
@@ -605,7 +440,7 @@ function sharePost(btn, platform) {
         mentions += ' ' + cleanDevId;
     }
     
-    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}`;
+    text += `\n\n布教内容はこちら👇\n${url}\n\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}`;
 
     if (platform === 'x') window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
     else if (platform === 'line') window.open(`https://line.me/R/msg/text/?${encodeURIComponent(text)}`, '_blank');
@@ -760,7 +595,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const promoBtn = document.querySelector(`button[data-postid="${postedId}"]`);
         if (promoBtn) {
             setTimeout(() => {
-                alert("🎉 布教の投稿が完了しました！\\n生成された「布教カード」をSNSでシェアして、あなたの推しゲーを広めましょう！");
+                alert("🎉 布教の投稿が完了しました！\n生成された「布教カード」をSNSでシェアして、あなたの推しゲーを広めましょう！");
                 openPromoCard(promoBtn);
                 window.history.replaceState({}, document.title, window.location.pathname);
             }, 300);
@@ -882,7 +717,7 @@ async function drawPromoCard() {
             img.src = '/proxy-image?url=' + encodeURIComponent(imageUrl);
             await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
             drawH = img.height * (W / img.width);
-        } catch(e) { img = null; }
+        } catch(e) {}
     }
 
     let catchY = 650;
@@ -904,75 +739,6 @@ async function drawPromoCard() {
 
     if (target) {
         simY += 35 + 35 + 60;
-    }
-
-    const tags = [];
-    if(playTime) tags.push(playTime);
-    if(genre) tags.push(genre);
-    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
-    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
-    if(tags.length) { simY += 42 + 40; }
-
-    const panelH = simY - panelY + 20;
-    const H = Math.max(1350, panelY + panelH + 100);
-    
-    canvas.width = W; canvas.height = H;
-
-    const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-
-    if (img) {
-        ctx.drawImage(img, 0, 0, W, drawH);
-        const fadeStart = Math.max(0, drawH - 250);
-        const fade = ctx.createLinearGradient(0, fadeStart, 0, drawH);
-        fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(1, '#020617');
-        ctx.fillStyle = fade; ctx.fillRect(0, fadeStart, W, drawH - fadeStart);
-        if (drawH < H) {
-            ctx.fillStyle = '#020617';
-            ctx.fillRect(0, drawH, W, H - drawH);
-        }
-    } else {
-        const glow = ctx.createRadialGradient(W/2, 300, 50, W/2, 300, 600);
-        glow.addColorStop(0, 'rgba(245,158,11,0.2)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
-        ctx.fillStyle = glow; ctx.fillRect(0, 0, W, 900);
-    }
-
-    ctx.fillStyle = '#f59e0b'; ctx.fillRect(0, 40, 12, 50);
-    ctx.font = '900 36px "Noto Sans JP", sans-serif'; ctx.fillText('OSHI-GE', 40, 78);
-
-    let badgeText = '🟢 ネタバレなし'; let badgeColor = '#10b981'; let badgeBg = 'rgba(16, 185, 129, 0.2)';
-    if (spoiler === 1) { badgeText = '🟡 軽微なネタバレあり'; badgeColor = '#f59e0b'; badgeBg = 'rgba(245, 158, 11, 0.2)'; }
-    if (spoiler === 2) { badgeText = '🔴 ネタバレあり'; badgeColor = '#ef4444'; badgeBg = 'rgba(239, 68, 68, 0.2)'; }
-    ctx.font = '900 24px "Noto Sans JP", sans-serif';
-    const bw = ctx.measureText(badgeText).width + 40;
-    drawRoundRect(ctx, W - bw - 40, 40, bw, 50, 25);
-    ctx.fillStyle = badgeBg; ctx.fill();
-    ctx.strokeStyle = badgeColor; ctx.lineWidth = 2; ctx.stroke();
-    ctx.fillStyle = badgeColor; ctx.fillText(badgeText, W - bw - 20, 73);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 15;
-    ctx.font = '900 65px "Noto Sans JP", sans-serif';
-    wrapCanvasText(ctx, catchphrase, 50, catchY, 980, 85, 3);
-    ctx.shadowBlur = 0;
-
-    drawRoundRect(ctx, 40, panelY, 1000, panelH, 20);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
-
-    let currentY = panelY + 70;
-    ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
-    const drawnTitleLines = wrapCanvasText(ctx, title, 80, currentY, 920, 55, 2);
-    currentY += drawnTitleLines * 55 + 30;
-
-    if (contentRaw) {
-        ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
-        const drawnContentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, currentY, 920, 45, 4);
-        currentY += drawnContentLines * 45 + 40;
-    }
-
-    if (target) {
         ctx.fillStyle = '#94a3b8'; ctx.font = '700 22px "Noto Sans JP", sans-serif';
         ctx.fillText('👤 こんな人におすすめ', 80, currentY);
         currentY += 35;
@@ -1027,17 +793,17 @@ function sharePromoCardToX() {
     const devId = modal.dataset.dev || '';
     
     const url = window.location.href.split('?')[0]; 
-    const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
+    const cleanTitleTag = '#' + title.replace(/[\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
     
-    let text = `このゲーム、もっと知られてほしい。\\n\\n🎮 『${title}』`;
-    if (catchphrase) text += `\\n\\n「${catchphrase}」`;
+    let text = `このゲーム、もっと知られてほしい。\n\n🎮 『${title}』`;
+    if (catchphrase) text += `\n\n「${catchphrase}」`;
     
     if (spoilerLevel === 0 && content.trim()) {
         let impression = content.trim();
         if (Array.from(impression).length > 20) impression = Array.from(impression).slice(0, 20).join('') + '…';
-        text += `\\n\\n💬「${impression}」`;
-    } else if (spoilerLevel === 1) text += `\\n\\n🔒 軽微なネタバレを含みます`;
-    else if (spoilerLevel === 2) text += `\\n\\n⚠️ ネタバレあり`;
+        text += `\n\n💬「${impression}」`;
+    } else if (spoilerLevel === 1) text += `\n\n🔒 軽微なネタバレを含みます`;
+    else if (spoilerLevel === 2) text += `\n\n⚠️ ネタバレあり`;
     
     let mentions = "@horse_123123";
     if (devId.trim()) {
@@ -1046,7 +812,7 @@ function sharePromoCardToX() {
         mentions += ' ' + cleanDevId;
     }
     
-    text += `\\n\\n布教内容はこちら👇\\n${url}\\n\\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}`;
+    text += `\n\n布教内容はこちら👇\n${url}\n\n${cleanTitleTag} #推しゲー #OshiGe ${mentions}`;
     
     alert("この後開くXの投稿画面で、先ほど保存した「布教カード画像」を貼り付けてポストしてください！");
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`, '_blank');
@@ -1714,7 +1480,6 @@ EDIT_POST_HTML = """
 </div>
 """
 
-
 def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
     content_html = get_template(content_template_str).render(**kwargs)
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
@@ -1727,7 +1492,6 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
     )
     return HTMLResponse(html)
 
-
 # ---------------------------------------------------------------------------
 # ルーティング
 # ---------------------------------------------------------------------------
@@ -1736,7 +1500,6 @@ def api_games_list():
     with get_db_connection() as conn:
         games = conn.execute("SELECT id, title FROM games").fetchall()
     return games
-
 
 @app.get("/")
 def read_root(request: Request, q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
@@ -1786,7 +1549,6 @@ def read_root(request: Request, q: str = "", genre: str = "", platform: str = ""
 
     return render_page(request, INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
 
-
 @app.get("/games/random")
 def random_game():
     with get_db_connection() as conn:
@@ -1795,11 +1557,9 @@ def random_game():
         return RedirectResponse(url=f"/games/{game['id']}", status_code=303)
     return RedirectResponse(url="/", status_code=303)
 
-
 @app.get("/games/new")
 def new_game_form(request: Request, title: str = ""):
     return render_page(request, NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge", title=clip(title, 200))
-
 
 @app.post("/games/new")
 def create_game(
@@ -1833,7 +1593,6 @@ def create_game(
         return render_page(request, NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, developer_x_id=developer_x_id, page_title="ゲームを追加する - Oshi-Ge")
 
     with get_db_connection() as conn:
-        # 重複チェックを先にやる(無駄な画像アップロードを防ぐ)
         if conn.execute('SELECT id FROM games WHERE LOWER(title) = LOWER(%s)', (title,)).fetchone():
             return dup_response()
 
@@ -1852,10 +1611,11 @@ def create_game(
 
     mark_posted(request)
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
-    c = request.cookies.get("my_posts", "")
-    set_cookie_safe(res, "my_posts", f"{c},{post_id}" if c else str(post_id))
+    
+    my_posts = parse_id_cookie(request, "my_posts")
+    my_posts.append(post_id)
+    set_cookie_safe(res, "my_posts", my_posts)
     return res
-
 
 @app.get("/games/{game_id}/edit")
 def edit_game_form(request: Request, game_id: int):
@@ -1864,7 +1624,6 @@ def edit_game_form(request: Request, game_id: int):
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     return render_page(request, EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
-
 
 @app.post("/games/{game_id}/edit")
 def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form("")):
@@ -1884,7 +1643,6 @@ def update_game(request: Request, game_id: int, title: str = Form(...), descript
         if not cur:
             raise HTTPException(status_code=404, detail="Game not found")
 
-        # 画像URLは DB の現在値を使う(フォームの値は信用しない)
         image_url = cur["image_url"] or ""
         if image_base64:
             new_url = upload_image_to_supabase(image_base64)
@@ -1898,7 +1656,6 @@ def update_game(request: Request, game_id: int, title: str = Form(...), descript
             conn.rollback()
             return alert_back('同じタイトルのゲームが既に登録されています。')
     return RedirectResponse(url=f"/games/{game_id}", status_code=303)
-
 
 @app.get("/games/{game_id}")
 def read_game(request: Request, game_id: int, sort: str = "likes"):
@@ -1917,7 +1674,6 @@ def read_game(request: Request, game_id: int, sort: str = "likes"):
     og_img = f"{get_base_url(request)}/games/{game_id}/ogp.png"
 
     return render_page(request, GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img, game_schema=game)
-
 
 @app.post("/games/{game_id}/posts")
 def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
@@ -1943,13 +1699,13 @@ def create_post(request: Request, game_id: int, username: str = Form(...), catch
 
     mark_posted(request)
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
-    c = request.cookies.get("my_posts", "")
-    set_cookie_safe(res, "my_posts", f"{c},{post_id}" if c else str(post_id))
+    
+    my_posts = parse_id_cookie(request, "my_posts")
+    my_posts.append(post_id)
+    set_cookie_safe(res, "my_posts", my_posts)
     return res
 
-
 NO_EDIT_PERMISSION = "<script>alert('投稿の編集権限が確認できませんでした（Cookieが無効化されている可能性があります）。');location.href='/games/{gid}';</script>"
-
 
 @app.get("/games/{game_id}/posts/{post_id}/edit")
 def edit_post_form(request: Request, game_id: int, post_id: int):
@@ -1960,7 +1716,6 @@ def edit_post_form(request: Request, game_id: int, post_id: int):
     if not post:
         raise HTTPException(status_code=404)
     return render_page(request, EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
-
 
 @app.post("/games/{game_id}/posts/{post_id}/edit")
 def update_post(
@@ -1993,7 +1748,6 @@ def update_post(
         conn.commit()
     return RedirectResponse(url=f"/games/{game_id}", status_code=303)
 
-
 @app.post("/posts/{post_id}/report")
 def report_post(post_id: int, reason: str = Form(...)):
     reason = reason if reason in REPORT_REASONS else "その他"
@@ -2003,7 +1757,6 @@ def report_post(post_id: int, reason: str = Form(...)):
         conn.execute('INSERT INTO reports (post_id, reason) VALUES (%s, %s)', (post_id, reason))
         conn.commit()
     return JSONResponse({"status": "ok"})
-
 
 @app.post("/games/{game_id}/posts/{post_id}/react/{react_type}")
 def react_post(game_id: int, post_id: int, react_type: str):
@@ -2022,7 +1775,6 @@ def react_post(game_id: int, post_id: int, react_type: str):
         conn.commit()
     return {"count": row[react_type]}
 
-
 @app.post("/games/{game_id}/bookmark")
 def toggle_bookmark(request: Request, game_id: int):
     bookmarks = parse_id_cookie(request, "bookmarks")
@@ -2037,9 +1789,8 @@ def toggle_bookmark(request: Request, game_id: int):
         is_bookmarked = True
     bookmarks = bookmarks[-200:]
     res = JSONResponse(content={"bookmarked": is_bookmarked})
-    set_cookie_safe(res, "bookmarks", ",".join(map(str, bookmarks)))
+    set_cookie_safe(res, "bookmarks", bookmarks)
     return res
-
 
 @app.post("/requests")
 def create_request(request: Request, title: str = Form(...), username: str = Form("名無しのゲーマー")):
@@ -2054,7 +1805,6 @@ def create_request(request: Request, title: str = Form(...), username: str = For
         conn.commit()
     mark_posted(request)
     return RedirectResponse(url="/", status_code=303)
-
 
 @app.get("/mypage")
 def mypage(request: Request):
@@ -2074,6 +1824,5 @@ def mypage(request: Request):
 
     return render_page(request, MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, total_likes=total_likes, page_title="マイページ - Oshi-Ge")
 
-
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
