@@ -5,11 +5,14 @@ import base64
 import uuid
 import time
 import io
+from urllib.parse import urlparse
 from collections import defaultdict
 from typing import List
 from fastapi import FastAPI, Request, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from jinja2 import Template
+from jinja2 import Environment, select_autoescape
+from markupsafe import Markup
+from itsdangerous import URLSafeSerializer
 import psycopg
 from psycopg.rows import dict_row
 from PIL import Image, ImageDraw, ImageFont
@@ -19,6 +22,9 @@ app = FastAPI()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+# Cookie改ざん防止用のシークレットキー（環境変数がなければランダム生成）
+SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24).hex())
+serializer = URLSafeSerializer(SECRET_KEY)
 
 FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
 FONT_PATH = "NotoSansCJKjp-Bold.otf"
@@ -30,7 +36,7 @@ def download_font():
             with urllib.request.urlopen(req) as response:
                 with open(FONT_PATH, 'wb') as f:
                     f.write(response.read())
-        except Exception as e:
+        except Exception:
             pass
 
 download_font()
@@ -66,7 +72,7 @@ def upload_image_to_supabase(base64_data: str) -> str:
         with urllib.request.urlopen(req) as response:
             pass
         return f"{SUPABASE_URL}/storage/v1/object/public/games/{filename}"
-    except Exception as e:
+    except Exception:
         return ""
 
 def init_db():
@@ -85,24 +91,32 @@ def init_db():
             conn.execute('''CREATE TABLE IF NOT EXISTS requests (
                 id SERIAL PRIMARY KEY, title TEXT NOT NULL, username TEXT NOT NULL, 
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
-            conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
-            conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
-            conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS developer_x_id TEXT DEFAULT ''")
-            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS catchphrase TEXT")
-            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS target_audience TEXT")
-            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS play_time TEXT")
-            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS likes INTEGER DEFAULT 0")
-            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS oshi_points TEXT DEFAULT ''")
-            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS wanna_play INTEGER DEFAULT 0")
-            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS agree INTEGER DEFAULT 0")
+            # 必要なカラムの追加
+            for col in ["platform TEXT", "image_url TEXT", "developer_x_id TEXT DEFAULT ''"]:
+                conn.execute(f"ALTER TABLE games ADD COLUMN IF NOT EXISTS {col}")
+            for col in ["catchphrase TEXT", "target_audience TEXT", "play_time TEXT", "likes INTEGER DEFAULT 0", "oshi_points TEXT DEFAULT ''", "wanna_play INTEGER DEFAULT 0", "agree INTEGER DEFAULT 0"]:
+                conn.execute(f"ALTER TABLE posts ADD COLUMN IF NOT EXISTS {col}")
             conn.commit()
-    except Exception as e:
+    except Exception:
         pass
 
 init_db()
 
+# Cookie操作の安全化（署名付き）
+def get_secure_cookie_list(request: Request, key: str) -> List[int]:
+    val = request.cookies.get(key)
+    if not val: return []
+    try:
+        return serializer.loads(val)
+    except:
+        return []
+
+def set_secure_cookie_list(res: Response, key: str, data: List[int]):
+    res.set_cookie(key=key, value=serializer.dumps(data), max_age=60*60*24*365, httponly=True, samesite="lax")
+
+
 @app.get("/robots.txt", response_class=Response)
-async def robots_txt(request: Request):
+def robots_txt(request: Request):
     host = request.headers.get("host", "")
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     base_url = f"{scheme}://{host}" if host else ""
@@ -110,7 +124,7 @@ async def robots_txt(request: Request):
     return Response(content=content, media_type="text/plain")
 
 @app.get("/sitemap.xml", response_class=Response)
-async def sitemap_xml(request: Request):
+def sitemap_xml(request: Request):
     host = request.headers.get("host", "")
     scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
     base_url = f"{scheme}://{host}" if host else ""
@@ -129,18 +143,23 @@ async def sitemap_xml(request: Request):
     return Response(content="\n".join(xml), media_type="application/xml")
 
 @app.get("/proxy-image")
-async def proxy_image(url: str):
+def proxy_image(url: str):
+    # SSRF対策：許可されたホスト（Supabase）のみアクセス可能にする
+    parsed = urlparse(url)
+    allowed_host = urlparse(SUPABASE_URL).hostname if SUPABASE_URL else None
+    if parsed.scheme != "https" or parsed.hostname != allowed_host:
+        raise HTTPException(status_code=403, detail="Forbidden URL")
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req) as response:
-            data = response.read()
+            data = response.read(5000000) # 5MB制限
             content_type = response.headers.get('Content-Type', 'image/jpeg')
             return Response(content=data, media_type=content_type)
     except Exception:
         raise HTTPException(status_code=404)
 
 @app.get("/ogp.png")
-async def generate_top_ogp():
+def generate_top_ogp():
     W, H = 1200, 630
     img = Image.new('RGB', (W, H), color='#0f172a')
     draw = ImageDraw.Draw(img)
@@ -158,10 +177,11 @@ async def generate_top_ogp():
 
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
-    return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+    # キャッシュヘッダを追加
+    return Response(content=img_byte_arr.getvalue(), media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
 
 @app.get("/games/{game_id}/ogp.png")
-async def generate_ogp(game_id: int):
+def generate_ogp(game_id: int):
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
         if not game: raise HTTPException(status_code=404)
@@ -174,7 +194,7 @@ async def generate_ogp(game_id: int):
         try:
             req = urllib.request.Request(game["image_url"], headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req) as response:
-                bg_data = response.read()
+                bg_data = response.read(5000000)
                 bg_img = Image.open(io.BytesIO(bg_data)).convert("RGBA")
                 bg_ratio = bg_img.width / bg_img.height
                 target_ratio = W / H
@@ -235,7 +255,7 @@ async def generate_ogp(game_id: int):
 
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format='PNG')
-    return Response(content=img_byte_arr.getvalue(), media_type="image/png")
+    return Response(content=img_byte_arr.getvalue(), media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
 
 CSS = """
 :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-main: #f8fafc; --text-sub: #94a3b8; --accent: #f59e0b; --accent-hover: #d97706; --border: #334155; --safe: #10b981; --warning: #f59e0b; --danger: #ef4444; }
@@ -362,7 +382,9 @@ function toggleSpoiler(btn) {
     }
 }
 
-function shareGameToX(title, devId) { 
+function shareGameToX(btn) { 
+    const title = btn.dataset.title;
+    const devId = btn.dataset.dev;
     const cleanTitleTag = '#' + title.replace(/[\\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
     let mentions = "@horse_123123";
     if (devId && devId.trim()) {
@@ -374,7 +396,8 @@ function shareGameToX(title, devId) {
     window.open(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
-function shareGameToLine(title) { 
+function shareGameToLine(btn) { 
+    const title = btn.dataset.title;
     window.open(`https://line.me/R/msg/text/?${encodeURIComponent(`次に遊ぶ神ゲーを探している方へ🎮\\n『${title}』のおすすめ布教ページです！👇\\n`)}${encodeURIComponent(window.location.href)}`, '_blank'); 
 }
 
@@ -848,612 +871,30 @@ function sharePromoCardToX() {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePromoCard(); });
 """
 
-BASE_HTML = """
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ page_title | default("Oshi-Ge | ネタバレなしゲーム布教サイト") }}</title>
-    <meta name="description" content="{{ og_description | default('未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。') }}">
-    <meta property="og:type" content="website">
-    <meta property="og:title" content="{{ page_title | default('Oshi-Ge | ネタバレなしゲーム布教サイト') }}">
-    <meta property="og:description" content="{{ og_description | default('未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。') }}">
-    {% if og_image %}
-    <meta property="og:image" content="{{ og_image }}">
-    <meta name="twitter:card" content="summary_large_image">
-    {% else %}
-    <meta property="og:image" content="{{ request.url.scheme }}://{{ request.headers.host }}/ogp.png">
-    <meta name="twitter:card" content="summary_large_image">
-    {% endif %}
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
-    
-    {% if game_schema %}
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "VideoGame",
-      "name": "{{ game_schema.title }}",
-      "description": "{{ game_schema.description | replace('\n', ' ') | replace('\r', '') }}",
-      "image": "{{ game_schema.image_url }}",
-      "genre": "{{ game_schema.genre }}"
-    }
-    </script>
-    {% endif %}
-
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-XRFBSR9HSR"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){dataLayer.push(arguments);}
-      gtag('js', new Date());
-      gtag('config', 'G-XRFBSR9HSR');
-    </script>
-    
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6608111802250449" crossorigin="anonymous"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
-
-    <style>{{ css }}</style>
-</head>
-<body>
-    <header class="header-container">
-        <h1><a href="/">🎮 Oshi-Ge</a></h1>
-        <div style="display:flex; gap: 1rem;">
-            <a href="/games/new" class="btn btn-primary btn-small" style="color: #ffffff;">＋ ゲームを布教する</a>
-            <a href="/mypage" class="btn btn-outline btn-small" style="color:var(--text-main);">👤 マイページ</a>
-        </div>
-    </header>
-    {% if is_top %}
-    <div class="hero">
-        <h2>誰かの人生を変える1本を。</h2>
-        <p>未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。</p>
-        <form action="/" method="get" class="search-bar-advanced">
-            <div class="search-inputs">
-                <input type="text" name="q" placeholder="タイトル検索..." value="{{ q }}">
-                <select name="genre">
-                    <option value="">全ジャンル</option>
-                    {% set genres_list = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}
-                    {% for g in genres_list %}<option value="{{ g }}" {% if genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}
-                </select>
-                <select name="platform">
-                    <option value="">全機種</option>
-                    {% set platforms_list = ["PC", "Switch", "Switch2", "PS5", "Xbox", "スマホ", "その他"] %}
-                    {% for p in platforms_list %}<option value="{{ p }}" {% if platform == p %}selected{% endif %}>{{ p }}</option>{% endfor %}
-                </select>
-                <button type="submit" class="btn btn-primary">絞り込み</button>
-            </div>
-        </form>
-    </div>
-    {% endif %}
-    <main>{{ content }}</main>
-
-    <!-- ガチャ演出用モーダル -->
-    <div id="gacha-modal" class="promo-modal" style="display:none; z-index: 10000;" onclick="if(event.target===this) closeGachaModal();">
-        <div class="promo-modal-box" style="width: min(500px, 100%); background: radial-gradient(circle, #1e293b 0%, #0f172a 100%); border: 2px solid var(--accent); text-align: center; padding: 2.5rem 1.5rem;">
-            <h3 style="color: var(--accent); font-size: 1.5rem; margin-bottom: 1.5rem;">🎰 神ゲー発掘ガチャ</h3>
-            <div style="background: #0b1120; border: 2px solid #334155; border-radius: 12px; padding: 2rem; margin-bottom: 2rem; min-height: 100px; display: flex; align-items: center; justify-content: center;">
-                <div id="gacha-title-display" style="font-size: 1.4rem; font-weight: bold; color: #fff;">抽選中...</div>
-            </div>
-            <div>
-                <button type="button" id="gacha-action-btn" class="btn btn-primary" style="display:none; font-size: 1.1rem; padding: 0.8rem 2rem; background: var(--accent);">✨ このゲームを見に行く</button>
-                <button type="button" class="btn btn-outline" onclick="closeGachaModal()" style="margin-left: 0.5rem; color: #94a3b8; border-color: #475569;">✕ 閉じる</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="crop_modal" class="promo-modal" style="display:none; z-index: 10000;">
-        <div class="promo-modal-box" style="width: min(600px, 100%); background: var(--bg-color);">
-            <div class="promo-modal-head">
-                <h3 style="margin: 0; color: var(--accent);">✂️ 画像の切り抜き</h3>
-                <button type="button" class="btn btn-outline btn-small" onclick="closeCropModal()">✕ キャンセル</button>
-            </div>
-            <p style="color: var(--text-sub); font-size: 0.9rem; margin-top: 0;">枠を動かして、見せたい範囲を指定してください。</p>
-            <div style="max-height: 50vh; overflow: hidden; margin-bottom: 1.5rem; background: #000; border-radius: 8px;">
-                <img id="cropper_img" src="" style="max-width: 100%; display: block;">
-            </div>
-            <button type="button" class="btn btn-primary" style="width: 100%; padding: 1rem; font-size: 1.1rem;" onclick="applyCrop()">✅ この範囲で切り抜く</button>
-        </div>
-    </div>
-
-    <!-- 通報用モーダル -->
-    <div id="report-modal" class="promo-modal" style="display:none; z-index: 10000;" onclick="if(event.target===this) closeReportModal();">
-        <div class="promo-modal-box" style="width: min(500px, 100%); background: var(--card-bg);">
-            <div class="promo-modal-head">
-                <h3 style="margin: 0; color: var(--danger);">⚠ この投稿を通報する</h3>
-                <button type="button" class="btn btn-outline btn-small" onclick="closeReportModal()">✕ 閉じる</button>
-            </div>
-            <p style="color: var(--text-sub); font-size: 0.9rem; margin-top: 0;">悪質な投稿（荒らし、スパム、悪質なネタバレ等）の理由を選んでください。</p>
-            <form id="reportForm" onsubmit="submitReport(event)">
-                <input type="hidden" id="report_post_id" name="post_id">
-                <div class="spoiler-radio-group" style="margin-bottom: 1.5rem;">
-                    <label class="radio-label"><div class="radio-header"><input type="radio" name="report_reason" value="ネタバレ" required> <span style="margin-left:0.5rem;">重大なネタバレが含まれる</span></div></label>
-                    <label class="radio-label"><div class="radio-header"><input type="radio" name="report_reason" value="誹謗中傷" required> <span style="margin-left:0.5rem;">誹謗中傷・攻撃的な内容</span></div></label>
-                    <label class="radio-label"><div class="radio-header"><input type="radio" name="report_reason" value="スパム" required> <span style="margin-left:0.5rem;">スパム・宣伝・荒らし</span></div></label>
-                    <label class="radio-label" style="border:none;"><div class="radio-header"><input type="radio" name="report_reason" value="その他" required> <span style="margin-left:0.5rem;">その他不適切な内容</span></div></label>
-                </div>
-                <button type="submit" class="btn btn-primary" style="width:100%; background:var(--danger); border:none; padding:1rem; font-size:1.1rem; box-shadow:none;">通報を送信する</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 布教カード用モーダル -->
-    <div id="promo-card-modal" class="promo-modal" style="display:none; z-index: 10000;" onclick="if(event.target===this) closePromoCard();">
-        <div class="promo-modal-box" style="width: min(1080px, 100%); background: #0f172a; padding: 0; overflow: hidden; border: 1px solid var(--border);">
-            <div class="promo-modal-head" style="padding: 1rem; margin: 0; background: #1e293b; border-bottom: 1px solid var(--border);">
-                <h3 style="margin: 0; color: #f8fafc;">🎴 布教カード</h3>
-                <button type="button" class="btn btn-outline btn-small" onclick="closePromoCard()" style="color: #fff; border-color: #475569;">✕ 閉じる</button>
-            </div>
-            <div style="padding: 1rem; max-height: 80vh; overflow-y: auto;">
-                <p id="promo-instruction" style="color: var(--text-sub); font-size: 0.9rem; margin-top: 0; text-align:center;"></p>
-                <div class="promo-canvas-wrap" style="background: transparent; border: none; padding: 0; display:flex; justify-content:center;">
-                    <canvas id="promoCanvas" style="display:none;"></canvas>
-                    <img id="promoResultImg" style="max-width: 100%; max-height: 60vh; object-fit: contain; border-radius: 12px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); display: none;">
-                </div>
-                <div class="promo-modal-actions" style="justify-content: center; margin-top: 1rem; gap: 1rem;">
-                    <button type="button" id="promo-dl-btn" class="btn btn-primary" onclick="downloadPromoCard()" style="font-size: 1.1rem; padding: 0.8rem 1.5rem;">📥 画像を保存する</button>
-                    <button type="button" class="btn btn-x" onclick="sharePromoCardToX()" style="font-size: 1.1rem; padding: 0.8rem 1.5rem;">🎴 保存した画像と一緒にXでシェア</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>{{ js }}</script>
-</body>
-</html>
-"""
-
-INDEX_HTML = """
-<!-- お題バナー -->
-<div style="background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; text-align: center; box-shadow: 0 10px 25px rgba(245, 158, 11, 0.3); border: 2px solid #fbbf24; cursor: pointer; transition: transform 0.2s;" onclick="location.href='/games/new'" onmouseover="this.style.transform='translateY(-4px)'" onmouseout="this.style.transform='translateY(0)'">
-    <div style="color: #fff; font-weight: bold; font-size: 0.95rem; margin-bottom: 0.5rem; letter-spacing: 0.1em;">🔥 今週のピックアップお題</div>
-    <h2 style="color: #fff; margin: 0 0 1rem 0; font-size: 1.8rem; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">「100時間以上溶かした時間泥棒ゲーム」</h2>
-    <div class="btn" style="background: #fff; color: #d97706; padding: 0.8rem 2.5rem; border-radius: 30px; font-weight: 900; box-shadow: 0 4px 10px rgba(0,0,0,0.2);">お題に沿って布教を書く ✍️</div>
-</div>
-
-<div class="discover-panel">
-    <h3>🔎 目的からゲームを探す</h3>
-    <div style="color: var(--text-sub); margin-bottom: 0.9rem;">タイトルを知らなくても大丈夫。気分や好みから探せます。</div>
-    <div class="quick-filter-grid">
-        <a class="quick-filter {% if q == 'ストーリー' %}active{% endif %}" href="/?q=ストーリー">📖 ストーリー重視</a>
-        <a class="quick-filter {% if q == '泣ける' %}active{% endif %}" href="/?q=泣ける">😭 泣ける</a>
-        <a class="quick-filter {% if q == '一人' %}active{% endif %}" href="/?q=一人">👤 一人で遊びたい</a>
-        <a class="quick-filter {% if q == '短時間' %}active{% endif %}" href="/?q=短時間">⏱ 短時間</a>
-        <a class="quick-filter {% if q == 'ホラー' %}active{% endif %}" href="/?q=ホラー">😱 ホラー</a>
-        <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
-        <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
-        <a class="quick-filter" href="#" onclick="startGacha(event)" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
-    </div>
-</div>
-
-<div class="layout-wrapper">
-    <div class="main-column">
-        <div style="display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">
-            <h3 style="margin:0;">布教されているゲーム</h3>
-            <div style="display: flex; gap: 0.5rem;">
-                <a href="?sort=new{% if q %}&q={{ q }}{% endif %}{% if genre %}&genre={{ genre }}{% endif %}{% if platform %}&platform={{ platform }}{% endif %}" class="btn btn-outline btn-small" style="{% if sort == 'new' or not sort %}background:rgba(245,158,11,0.1); border-color:var(--accent); color:var(--accent);{% endif %}">🕒 最新順</a>
-                <a href="?sort=posts{% if q %}&q={{ q }}{% endif %}{% if genre %}&genre={{ genre }}{% endif %}{% if platform %}&platform={{ platform }}{% endif %}" class="btn btn-outline btn-small" style="{% if sort == 'posts' %}background:rgba(245,158,11,0.1); border-color:var(--accent); color:var(--accent);{% endif %}">🔥 投稿数順</a>
-            </div>
-        </div>
-        <div class="game-grid">
-            {% for game in games %}
-                <div class="game-card" onclick="location.href='/games/{{ game.id }}'">
-                    {% if game.image_url %}<img src="{{ game.image_url }}" alt="" class="game-thumbnail" onerror="this.style.display='none'">
-                    {% else %}<div class="game-thumbnail empty">NO IMAGE</div>{% endif %}
-                    <div class="game-card-body">
-                        <h3 style="font-size: 1.2rem; margin: 0 0 0.5rem 0; color: var(--text-main);">{{ game.title }}</h3>
-                        <div style="margin-bottom: 1rem;">
-                            <span class="tag genre" style="margin:0;">🎮 {{ game.genre }}</span>
-                            <span class="tag" style="margin:0; background: transparent; border: 1px solid var(--border); color: var(--text-sub);">💬 布教 {{ game.post_count }}件</span>
-                            {% if game.platform %}{% for p in game.platform.split(',') %}{% if p.strip() %}<span class="tag" style="margin:0; margin-top:0.3rem;">💻 {{ p.strip() }}</span>{% endif %}{% endfor %}{% endif %}
-                        </div>
-                        {% if game.latest_catchphrase %}<div class="latest-catchphrase">「{{ game.latest_catchphrase }}」</div>{% endif %}
-                    </div>
-                </div>
-            {% else %}
-                <div style="grid-column: 1 / -1; text-align: center; color: var(--text-sub); padding: 3rem; background: var(--card-bg); border-radius:12px;"><p>条件に合うゲームが見つかりませんでした。</p></div>
-            {% endfor %}
-        </div>
-    </div>
-    <div class="sidebar-column">
-        <!-- 布教リクエスト機能 -->
-        <div class="card" style="border-color: #3b82f6; padding: 1.2rem; background: rgba(59, 130, 246, 0.05);">
-            <h3 style="margin-top: 0; color: #3b82f6; border-bottom: 1px solid rgba(59, 130, 246, 0.3); padding-bottom: 0.5rem;">🙋 誰か布教して！</h3>
-            <p style="font-size: 0.85rem; color: var(--text-sub); margin-bottom: 1rem;">気になっているゲームのプレゼンを誰かにリクエストしよう。</p>
-            <form action="/requests" method="post" style="margin-bottom: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
-                <input type="text" name="title" placeholder="ゲームタイトルを入力" required style="padding: 0.75rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white;">
-                <input type="text" name="username" placeholder="あなたの名前 (匿名可)" value="名無しのゲーマー" required style="padding: 0.5rem; border-radius: 8px; border: 1px solid var(--border); background: #0f172a; color: white; font-size: 0.9rem;">
-                <button type="submit" class="btn btn-primary btn-small" style="background: #3b82f6; border: none; font-size: 1rem; padding: 0.6rem;">リクエストを送信 ✈️</button>
-            </form>
-            
-            <div style="display: flex; flex-direction: column; gap: 0.8rem;">
-                <div style="font-size: 0.85rem; font-weight: bold; color: var(--text-sub);">現在募集中のリクエスト</div>
-                {% for req in requests %}
-                <div style="background: #0f172a; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
-                    <div style="font-weight: bold; color: var(--text-main); font-size: 0.95rem;">{{ req.title }}</div>
-                    <div style="font-size: 0.75rem; color: var(--text-sub); margin-top: 0.3rem;">👤 リクエスター: {{ req.username }}</div>
-                    <a href="/games/new?title={{ req.title | urlencode }}" style="display: inline-block; margin-top: 0.6rem; font-size: 0.85rem; color: #f59e0b; text-decoration: none; font-weight: bold; padding: 0.3rem 0.6rem; background: rgba(245, 158, 11, 0.1); border-radius: 4px; border: 1px solid rgba(245, 158, 11, 0.3);">👉 このゲームを布教する</a>
-                </div>
-                {% else %}
-                <div style="color: var(--text-sub); font-size: 0.85rem; text-align: center;">現在リクエストはありません。</div>
-                {% endfor %}
-            </div>
-        </div>
-
-        <div class="card" style="border-color: var(--accent); padding: 1.2rem;">
-            <h3 style="margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">👑 今週の注目ゲーム</h3>
-            <div style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
-                {% for item in weekly_ranking %}
-                <div style="display: flex; gap: 1rem; align-items: center; cursor: pointer;" onclick="location.href='/games/{{ item.id }}'">
-                    <div style="width: 60px; height: 60px; border-radius: 8px; overflow: hidden; background: #334155; flex-shrink: 0;">
-                        {% if item.image_url %}<img src="{{ item.image_url }}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'">
-                        {% else %}<div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 0.6rem; color: #94a3b8;">NO IMG</div>{% endif %}
-                    </div>
-                    <div>
-                        <div style="font-weight: bold; color: var(--text-main); font-size: 0.95rem; margin-bottom: 0.2rem;">{{ item.title }}</div>
-                        <div style="font-size: 0.8rem; color: var(--accent);">🔥 今週 {{ item.weekly_likes }} リアクション</div>
-                    </div>
-                </div>
-                {% else %}<div style="color: var(--text-sub); font-size: 0.9rem;">今週の布教はまだありません。</div>{% endfor %}
-            </div>
-        </div>
-    </div>
-</div>
-"""
-
-GAME_HTML = """
-<div class="card" style="position: relative;">
-    <div class="game-header-row" style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
-        <h2 style="font-size: 2rem; margin: 0; font-weight: 900; word-break: break-all;">{{ game.title }}</h2>
-        <div class="game-header-actions" style="display:flex; gap: 0.5rem; flex-shrink: 0;">
-            <button type="button" class="btn-bookmark {% if is_bookmarked %}bookmarked{% endif %}" onclick="toggleBookmark({{ game.id }}, this)">
-                {% if is_bookmarked %}🔖 お気に入り解除{% else %}🔖 お気に入りに追加{% endif %}
-            </button>
-            <a href="/games/{{ game.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.5rem 1rem;">⚙️ 編集</a>
-        </div>
-    </div>
-    {% if game.image_url %}<div><img src="{{ game.image_url }}" class="game-hero-image" onerror="this.style.display='none'"></div>{% endif %}
-    <div style="margin-bottom: 1.5rem;">
-        <span class="tag genre">🎮 {{ game.genre }}</span>
-        {% if game.platform %}{% for p in game.platform.split(',') %}{% if p.strip() %}<span class="tag">💻 {{ p.strip() }}</span>{% endif %}{% endfor %}{% endif %}
-    </div>
-    <div style="background: #0f172a; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
-        <p style="margin: 0; white-space: pre-wrap; color: #cbd5e1;">{{ game.description }}</p>
-    </div>
-    
-    <div style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-        <a href="https://www.amazon.co.jp/s?k={{ game.title }}&i=videogames&tag=oshige06-22" target="_blank" class="btn btn-outline btn-small" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.5);">🛒 Amazonで探す</a>
-        <a href="https://search.rakuten.co.jp/search/mall/{{ game.title }}/?tg=101240" target="_blank" class="btn btn-outline btn-small" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.5);">🛍 楽天市場で探す</a>
-        <a href="https://store.steampowered.com/search/?term={{ game.title }}" target="_blank" class="btn btn-outline btn-small" style="color: #cbd5e1; border-color: rgba(203, 213, 225, 0.5);">🎮 Steamで探す</a>
-    </div>
-
-    <div style="display: flex; gap: 0.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
-        <button type="button" class="btn btn-x" onclick="shareGameToX('{{ game.title }}', '{{ game.developer_x_id | default('') }}')">X でゲームを共有</button>
-        <button type="button" class="btn btn-line" onclick="shareGameToLine('{{ game.title }}')">LINE でゲームを共有</button>
-    </div>
-</div>
-
-<details class="card" style="border-color: var(--accent); box-shadow: 0 0 15px rgba(245, 158, 11, 0.1);">
-    <summary style="cursor: pointer; font-weight: bold; color: var(--accent); font-size: 1.1rem; user-select: none; outline: none;">
-        🔥 このゲームを布教する（クリックして投稿フォームを開く）
-    </summary>
-    <form action="/games/{{ game.id }}/posts" method="post" style="margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
-        
-        <!-- 布教のヒント -->
-        <div style="background: rgba(245, 158, 11, 0.08); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; color: #cbd5e1;">
-            <div style="font-weight: bold; color: var(--accent); margin-bottom: 0.4rem;">💡 布教のヒント（こんなことを書くと魅力が伝わります！）</div>
-            <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-sub);">
-                <li>どんなところが面白い？（バトル、世界観、キャラなど）</li>
-                <li>どんな人におすすめ？</li>
-                <li>遊んだあと、どんな気持ちになった？</li>
-            </ul>
-            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！</div>
-        </div>
-
-        <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
-        <div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
-            <div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" required placeholder="例：最後まで遊んだときに、やってよかったと思える作品" style="border-color: rgba(245, 158, 11, 0.5);"></div>
-            <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-                <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" placeholder="例：ストーリー重視の人"></div>
-                <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" placeholder="例：10～15時間"></div>
-            </div>
-            
-            <div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label>
-                <div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">
-                    {% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}
-                    {% for pt in points %}
-                    <label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
-                        <input type="checkbox" name="oshi_points" value="{{ pt }}">
-                        <span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span>
-                    </label>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        
-        <div class="form-group">
-            <label>ネタバレレベル（詳細コメントの公開設定）:</label>
-            <div class="spoiler-radio-group">
-                <label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" checked> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div><span class="radio-desc">未プレイの人が読んでも問題ない内容</span></label>
-                <label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1"> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div><span class="radio-desc">序盤の設定など、体験に多少影響する内容</span></label>
-                <label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2"> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div><span class="radio-desc">ストーリー展開など、体験を大きく左右する内容</span></label>
-            </div>
-        </div>
-        <div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required placeholder="熱い思いをぶつけてください。"></textarea></div>
-        <button type="submit" class="btn btn-primary" style="width: 100%; font-size:1.1rem; padding: 1rem;">布教を投稿する</button>
-    </form>
-</details>
-
-<div>
-    <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 1rem;">
-        <h3 style="margin: 0;">みんなの布教</h3>
-        <div style="display: flex; gap: 0.5rem;">
-            <a href="?sort=likes" class="btn btn-outline btn-small" style="{% if sort == 'likes' or not sort %}background:rgba(245,158,11,0.1); border-color:var(--accent); color:var(--accent);{% endif %}">👍 おすすめ順</a>
-            <a href="?sort=new" class="btn btn-outline btn-small" style="{% if sort == 'new' %}background:rgba(245,158,11,0.1); border-color:var(--accent); color:var(--accent);{% endif %}">🕒 新着順</a>
-        </div>
-    </div>
-    {% for post in posts %}
-    <div class="card post-card">
-        <div class="post-header">
-            <span class="post-author">👤 {{ post.username }}</span>
-            <div style="display: flex; align-items: center; gap: 1rem;">
-                <span>{{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}</span>
-                {% if post.id in my_posts %}<a href="/games/{{ game.id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">⚙ 編集</a>{% endif %}
-            </div>
-        </div>
-        {% if post.catchphrase %}
-        <div style="margin-bottom: 1rem;"><h4 class="catchphrase-text">「{{ post.catchphrase }}」</h4>
-            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.85rem;">
-                {% if post.target_audience %}<span class="meta-tag">🎯 {{ post.target_audience }}におすすめ</span>{% endif %}
-                {% if post.play_time %}<span class="meta-tag">⏱ {{ post.play_time }}</span>{% endif %}
-            </div>
-        </div>
-        {% endif %}
-        
-        {% if post.oshi_points %}
-        <div style="margin-bottom: 1.25rem;">
-            {% for pt in post.oshi_points.split(',') %}{% if pt %}<span class="tag oshi-point">{{ pt }}</span>{% endif %}{% endfor %}
-        </div>
-        {% endif %}
-
-        {% if post.spoiler_level == 0 %}<div><span class="spoiler-badge safe">🔐 ネタバレなしの詳細</span><div class="post-content"><p>{{ post.content }}</p></div></div>
-        {% elif post.spoiler_level == 1 %}<div><button type="button" class="spoiler-toggle-btn warning" onclick="toggleSpoiler(this)">🔒 軽微なネタバレの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>
-        {% elif post.spoiler_level == 2 %}<div><button type="button" class="spoiler-toggle-btn danger" onclick="toggleSpoiler(this)">⚠ ネタバレありの詳細【クリックして表示】</button><div class="spoiler-hidden-text" style="display: none;"><div class="post-content"><p>{{ post.content }}</p></div></div></div>{% endif %}
-        
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
-            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                <button type="button" class="btn btn-outline btn-small" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ game.developer_x_id | default('') }}" onclick="sharePost(this, 'x')">X で共有</button>
-                <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ game.id }}" data-title="{{ game.title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ game.developer_x_id | default('') }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                
-                <button type="button" class="btn btn-outline btn-small" 
-                    data-id="{{ game.id }}"
-                    data-postid="{{ post.id }}"
-                    data-title="{{ game.title | default('') | escape }}" 
-                    data-catch="{{ post.catchphrase | default('') | escape }}" 
-                    data-target="{{ post.target_audience | default('') | escape }}" 
-                    data-play="{{ post.play_time | default('') | escape }}" 
-                    data-user="{{ post.username | default('名無しの布教者') | escape }}" 
-                    data-genre="{{ game.genre | default('') | escape }}" 
-                    data-platform="{{ game.platform | default('') | escape }}" 
-                    data-spoiler="{{ post.spoiler_level | default(0) }}" 
-                    data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
-                    data-img="{{ game.image_url | default('') | escape }}" 
-                    data-oshi="{{ post.oshi_points | default('') | escape }}" 
-                    data-dev="{{ game.developer_x_id | default('') | escape }}" 
-                    onclick="openPromoCard(this)">🎴 布教カード</button>
-
-                <button type="button" class="btn btn-outline btn-small" style="color:var(--text-sub); border:none; padding:0.4rem;" onclick="openReportModal({{ post.id }})">⚠ 通報</button>
-            </div>
-            
-            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; flex-shrink: 0;">
-                <button type="button" class="btn-react btn-wanna-play" data-post-id="{{ post.id }}" data-type="wanna_play" onclick="reactPost({{ game.id }}, {{ post.id }}, 'wanna_play', this)">🎮 やってみる！ <span>{{ post.wanna_play | default(0) }}</span></button>
-                <button type="button" class="btn-react btn-agree" data-post-id="{{ post.id }}" data-type="agree" onclick="reactPost({{ game.id }}, {{ post.id }}, 'agree', this)">🤝 わかる <span>{{ post.agree | default(0) }}</span></button>
-                <button type="button" class="btn-react btn-like" data-post-id="{{ post.id }}" data-type="likes" onclick="reactPost({{ game.id }}, {{ post.id }}, 'likes', this)">👍 いいね <span>{{ post.likes | default(0) }}</span></button>
-            </div>
-        </div>
-    </div>
-    {% else %}<div class="card" style="text-align: center; color: var(--text-sub); padding: 3rem 0; background: transparent; border: 1px dashed var(--border);"><p style="margin: 0;">まだ布教コメントがありません。<br>最初の布教者になりませんか？</p></div>{% endfor %}
-</div>
-"""
-
-MYPAGE_HTML = """
-<div class="card">
-    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">👤 マイページ</h2>
-    
-    <div id="like-notification" style="display: none; background: rgba(16, 185, 129, 0.1); border: 1px solid var(--safe); color: var(--safe); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; justify-content: space-between; align-items: center;">
-        <div style="font-weight: bold;">🎉 あなたの布教に新しいリアクションがつきました！</div>
-        <button onclick="document.getElementById('like-notification').style.display='none'" style="background: transparent; border: none; color: var(--safe); font-size: 1.2rem; cursor: pointer;">✕</button>
-    </div>
-
-    <h3 style="color: var(--accent); margin-top: 2rem;">🔖 お気に入りに追加したゲーム</h3>
-    <div class="game-grid" style="margin-bottom: 3rem;">
-        {% for game in bookmarked_games %}
-        <div class="game-card" onclick="location.href='/games/{{ game.id }}'">
-            {% if game.image_url %}<img src="{{ game.image_url }}" alt="" class="game-thumbnail" onerror="this.style.display='none'">
-            {% else %}<div class="game-thumbnail empty">NO IMAGE</div>{% endif %}
-            <div class="game-card-body">
-                <h3 style="font-size: 1.2rem; margin: 0 0 0.5rem 0; color: var(--text-main);">{{ game.title }}</h3>
-                <div><span class="tag genre">🎮 {{ game.genre }}</span></div>
-            </div>
-        </div>
-        {% else %}
-        <div style="grid-column: 1 / -1; color: var(--text-sub); padding: 1rem;">お気に入りに登録したゲームはまだありません。</div>
-        {% endfor %}
-    </div>
-    <h3 style="color: var(--accent);">✍ 自分の布教履歴</h3>
-    <div>
-        {% for post in my_posts_list %}
-        <div class="card post-card" style="margin-bottom: 1rem;">
-            <div style="font-weight: bold; margin-bottom: 0.5rem;"><a href="/games/{{ post.game_id }}" style="color: var(--accent); text-decoration: underline;">{{ post.game_title }}</a> への布教</div>
-            <div class="post-header" style="margin-bottom: 0.5rem;">
-                <span class="post-author">{{ post.username }}</span>
-                <div style="display: flex; gap: 1rem; align-items: center;">
-                    <span>{{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}</span>
-                    <a href="/games/{{ post.game_id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem;">⚙ 編集</a>
-                </div>
-            </div>
-            {% if post.catchphrase %}<div class="catchphrase-text" style="font-size: 1.1rem; margin-bottom: 0.5rem;">「{{ post.catchphrase }}」</div>{% endif %}
-            
-            {% if post.oshi_points %}
-            <div style="margin-bottom: 0.75rem;">
-                {% for pt in post.oshi_points.split(',') %}{% if pt %}<span class="tag oshi-point">{{ pt }}</span>{% endif %}{% endfor %}
-            </div>
-            {% endif %}
-            
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; flex-wrap: wrap; gap: 1rem;">
-                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; flex: 1; min-width: 250px;">
-                    <button type="button" class="btn btn-outline btn-small" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ post.game_developer_x_id | default('') }}" onclick="sharePost(this, 'x')">X で共有</button>
-                    <button type="button" class="btn btn-outline btn-small" style="color:#06C755; border-color:rgba(6,199,85,0.5);" data-id="{{ post.game_id }}" data-title="{{ post.game_title }}" data-catch="{{ post.catchphrase }}" data-content="{{ post.content }}" data-spoiler="{{ post.spoiler_level }}" data-dev="{{ post.game_developer_x_id | default('') }}" onclick="sharePost(this, 'line')">LINE で共有</button>
-                    
-                    <button type="button" class="btn btn-outline btn-small" 
-                        data-id="{{ post.game_id }}"
-                        data-postid="{{ post.id }}"
-                        data-title="{{ post.game_title | default('') | escape }}" 
-                        data-catch="{{ post.catchphrase | default('') | escape }}" 
-                        data-target="{{ post.target_audience | default('') | escape }}" 
-                        data-play="{{ post.play_time | default('') | escape }}" 
-                        data-user="{{ post.username | default('名無しの布教者') | escape }}" 
-                        data-genre="{{ post.game_genre | default('') | escape }}" 
-                        data-platform="{{ post.game_platform | default('') | escape }}" 
-                        data-spoiler="{{ post.spoiler_level | default(0) }}" 
-                        data-content="{{ post.content | replace('\n', ' ') | replace('\r', '') | escape }}" 
-                        data-img="{{ post.game_image_url | default('') | escape }}" 
-                        data-oshi="{{ post.oshi_points | default('') | escape }}" 
-                        data-dev="{{ post.game_developer_x_id | default('') | escape }}" 
-                        onclick="openPromoCard(this)">🎴 布教カード</button>
-                </div>
-                <div style="display: flex; gap: 0.8rem; color: var(--text-sub); font-size: 0.9rem; font-weight: bold; flex-shrink: 0;">
-                    <span style="color: var(--safe);">🎮 {{ post.wanna_play | default(0) }}</span>
-                    <span style="color: #3b82f6;">🤝 {{ post.agree | default(0) }}</span>
-                    <span style="color: var(--accent);">👍 {{ post.likes | default(0) }}</span>
-                </div>
-            </div>
-        </div>
-        {% else %}
-        <div style="color: var(--text-sub); padding: 1rem;">布教履歴はまだありません。</div>
-        {% endfor %}
-    </div>
-</div>
-
-<script>
-document.addEventListener("DOMContentLoaded", () => {
-    const currentLikes = {{ total_likes | default(0) }};
-    const savedLikes = localStorage.getItem("oshi_ge_last_likes");
-    
-    if (savedLikes !== null) {
-        const lastSeenLikes = parseInt(savedLikes, 10);
-        if (currentLikes > lastSeenLikes) {
-            const notif = document.getElementById("like-notification");
-            if (notif) notif.style.display = "flex";
-        }
-    }
-    localStorage.setItem("oshi_ge_last_likes", currentLikes);
-});
-</script>
-"""
-
-NEW_GAME_HTML = """
-<div class="card">
-    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲームを追加して布教する</h2>
-    {% if error_msg %}<div style="background: rgba(239, 68, 68, 0.1); color: var(--danger); padding: 1rem; border-left: 4px solid var(--danger); margin-bottom: 1.5rem;">⚠️ {{ error_msg }}</div>{% endif %}
-    <form action="/games/new" method="post" enctype="multipart/form-data">
-        
-        <h3 style="color: var(--accent);">🎮 ゲームの基本情報</h3>
-        <div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ title | default('') }}" required></div>
-        <div class="form-group"><label>ジャンル:</label>
-            <select name="genre">
-                {% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}
-                {% for g in genres %}<option value="{{ g }}" {% if genre == g or (not genre and g == "その他 / 不明") %}selected{% endif %}>{{ g }}</option>{% endfor %}
-            </select>
-        </div>
-        <div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label>
-            <div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;">
-                <label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label>
-                <label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label>
-                <label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label>
-                <label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label>
-                <label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label>
-                <label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label>
-                <label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label>
-            </div>
-            <input type="hidden" name="platform" class="platform-hidden" value="{{ platform | default('') }}">
-        </div>
-        <div class="form-group"><label>開発者・公式のX(Twitter)ID（任意）:</label><input type="text" name="developer_x_id" placeholder="例：@IndieDev （@は省略可）" value="{{ developer_x_id | default('') }}"></div>
-        <div class="form-group"><label>ゲーム画像（任意・自動で最適なサイズに圧縮されます）:</label>
-            <input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;">
-            <input type="hidden" name="image_base64" id="image_base64">
-            <div id="image_preview" style="margin-top: 1rem; display: none;"><img id="preview_img" src="" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div>
-        </div>
-        <div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ description | default('') }}</textarea></div>
-
-        <h3 style="margin-top: 2rem; color: var(--accent); border-top: 1px dashed var(--border); padding-top: 1.5rem;">🔥 最初の布教コメント</h3>
-        
-        <!-- 布教のヒント -->
-        <div style="background: rgba(245, 158, 11, 0.08); border: 1px dashed rgba(245, 158, 11, 0.4); border-radius: 8px; padding: 1rem; margin-bottom: 1.5rem; font-size: 0.9rem; color: #cbd5e1;">
-            <div style="font-weight: bold; color: var(--accent); margin-bottom: 0.4rem;">💡 布教のヒント（こんなことを書くと魅力が伝わります！）</div>
-            <ul style="margin: 0; padding-left: 1.2rem; color: var(--text-sub);">
-                <li>どんなところが面白い？（バトル、世界観、キャラなど）</li>
-                <li>どんな人におすすめ？</li>
-                <li>遊んだあと、どんな気持ちになった？</li>
-            </ul>
-            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！</div>
-        </div>
-
-        <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
-        <div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;">
-            <div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" required placeholder="例：最後まで遊んだときに、やってよかったと思える作品" style="border-color: rgba(245, 158, 11, 0.5);"></div>
-            <div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;">
-                <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" placeholder="例：ストーリー重視の人"></div>
-                <div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" placeholder="例：10～15時間"></div>
-            </div>
-            
-            <div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label>
-                <div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">
-                    {% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}
-                    {% for pt in points %}
-                    <label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);">
-                        <input type="checkbox" name="oshi_points" value="{{ pt }}">
-                        <span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span>
-                    </label>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        
-        <div class="form-group">
-            <label>ネタバレレベル（詳細コメントの公開設定）:</label>
-            <div class="spoiler-radio-group">
-                <label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" checked> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div><span class="radio-desc">未プレイの人が読んでも問題ない内容</span></label>
-                <label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1"> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div><span class="radio-desc">序盤の設定など、体験に多少影響する内容</span></label>
-                <label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2"> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div><span class="radio-desc">ストーリー展開など、体験を大きく左右する内容</span></label>
-            </div>
-        </div>
-        <div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required placeholder="熱い思いをぶつけてください。"></textarea></div>
-        
-        <button type="submit" class="btn btn-primary" style="width: 100%; font-size:1.1rem; padding: 1rem; margin-top: 1rem;">ゲームを登録して布教する</button>
-    </form>
-</div>
-"""
-EDIT_GAME_HTML = """<div class="card"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">ゲーム情報を編集する</h2><form action="/games/{{ game.id }}/edit" method="post" enctype="multipart/form-data"><div class="form-group"><label>タイトル（必須）:</label><input type="text" name="title" value="{{ game.title }}" required></div><div class="form-group"><label>ジャンル:</label><select name="genre">{% set genres = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"] %}{% for g in genres %}<option value="{{ g }}" {% if game.genre == g %}selected{% endif %}>{{ g }}</option>{% endfor %}</select></div><div class="form-group checkbox-group"><label>プラットフォーム（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 1rem; padding: 0.5rem 0;"><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PC" onchange="updatePlatform(this.form)"> PC</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch" onchange="updatePlatform(this.form)"> Switch</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Switch2" onchange="updatePlatform(this.form)"> Switch2</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="PS5" onchange="updatePlatform(this.form)"> PS5</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="Xbox" onchange="updatePlatform(this.form)"> Xbox</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="スマホ" onchange="updatePlatform(this.form)"> スマホ</label><label style="cursor: pointer; display: flex; align-items: center;"><input type="checkbox" class="platform-cb" value="その他" onchange="updatePlatform(this.form)"> その他</label></div><input type="hidden" name="platform" class="platform-hidden" value="{{ game.platform | default('') }}"></div><div class="form-group"><label>開発者・公式のX(Twitter)ID（任意）:</label><input type="text" name="developer_x_id" placeholder="例：@IndieDev （@は省略可）" value="{{ game.developer_x_id | default('') }}"></div><div class="form-group"><label>ゲーム画像（新しくアップロードして変更する場合のみ選択）:</label><input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;"><input type="hidden" name="image_base64" id="image_base64"><input type="hidden" name="existing_image_url" value="{{ game.image_url | default('') }}"><div id="image_preview" style="margin-top: 1rem; display: {% if game.image_url %}block{% else %}none{% endif %};"><img id="preview_img" src="{{ game.image_url | default('') }}" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div></div><div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game.id }}" class="btn btn-outline" style="flex: 1; text-align:center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
-EDIT_POST_HTML = """<div class="card" style="border-color: var(--accent);"><h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: var(--accent);">自分の布教を編集する</h2><form action="/games/{{ game_id }}/posts/{{ post.id }}/edit" method="post"><div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="{{ post.username }}" required></div><div style="background: #0b1120; padding: 1.5rem; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 1.5rem;"><div class="form-group"><label style="color: var(--accent);">一言で布教すると？（必須）:</label><input type="text" name="catchphrase" value="{{ post.catchphrase | default('') }}" required style="border-color: rgba(245, 158, 11, 0.5);"></div><div style="display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap;"><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>誰におすすめ？ <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="target_audience" value="{{ post.target_audience | default('') }}"></div><div class="form-group" style="flex: 1; min-width: 200px; margin-bottom: 0;"><label>プレイ時間 <span style="color:var(--text-sub); font-weight:normal; font-size:0.85rem;">（任意）</span>:</label><input type="text" name="play_time" value="{{ post.play_time | default('') }}"></div></div><div class="form-group checkbox-group" style="margin-bottom: 0;"><label>💡 このゲームの推しポイント（複数選択可）:</label><div style="display: flex; flex-wrap: wrap; gap: 0.8rem; padding: 0.5rem 0;">{% set points = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"] %}{% for pt in points %}<label style="cursor: pointer; display: flex; align-items: center; background: #1e293b; padding: 0.4rem 0.8rem; border-radius: 8px; border: 1px solid var(--border);"><input type="checkbox" name="oshi_points" value="{{ pt }}" {% if post and pt in post.oshi_points|default('') %}checked{% endif %}><span style="margin-left:0.5rem; font-size:0.9rem;">{{ pt }}</span></label>{% endfor %}</div></div></div><div class="form-group"><label>ネタバレレベル:</label><div class="spoiler-radio-group"><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="0" {% if post.spoiler_level == 0 %}checked{% endif %}> <span style="color:var(--safe)">Lv.0 ネタバレなし</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="1" {% if post.spoiler_level == 1 %}checked{% endif %}> <span style="color:var(--warning)">Lv.1 軽微なネタバレ</span></div></label><label class="radio-label"><div class="radio-header"><input type="radio" name="spoiler_level" value="2" {% if post.spoiler_level == 2 %}checked{% endif %}> <span style="color:var(--danger)">Lv.2 ネタバレあり</span></div></label></div></div><div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required>{{ post.content }}</textarea></div><div style="display: flex; gap: 1rem; margin-top: 1.5rem;"><a href="/games/{{ game_id }}" class="btn btn-outline" style="flex: 1; text-align: center;">キャンセル</a><button type="submit" class="btn btn-primary" style="flex: 2;">変更を保存する</button></div></form></div>"""
+# Jinja2環境の設定（自動エスケープを有効化しXSSを防止）
+env = Environment(autoescape=select_autoescape(['html', 'xml']))
 
 def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
-    content_html = Template(content_template_str).render(**kwargs)
+    # None表示バグを防ぐため、kwargs内のNoneを空文字に置換
+    safe_kwargs = {k: (v if v is not None else "") for k, v in kwargs.items()}
+    content_html = env.from_string(content_template_str).render(request=request, **safe_kwargs)
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
     final_desc = og_description if og_description else "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。"
     
-    return HTMLResponse(Template(BASE_HTML).render(
-        request=request, css=CSS, js=JS, content=content_html, is_top=is_top, 
-        page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema, **kwargs
+    # テンプレートに変数を埋め込む際、Markupを使って二重エスケープを防ぐ
+    return HTMLResponse(env.from_string(BASE_HTML).render(
+        request=request, css=Markup(CSS), js=Markup(JS), content=Markup(content_html), is_top=is_top, 
+        page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema, **safe_kwargs
     ))
 
 @app.get("/api/games-list")
-async def api_games_list():
+def api_games_list():
     with get_db_connection() as conn:
         games = conn.execute("SELECT id, title FROM games").fetchall()
     return games
 
 @app.get("/")
-async def read_root(request: Request, q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
+def read_root(request: Request, q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
     order_clause = "g.created_at DESC"
     if sort == "posts": order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
     query = f'''SELECT g.*, (SELECT catchphrase FROM posts p WHERE p.game_id = g.id ORDER BY p.created_at DESC LIMIT 1) as latest_catchphrase, (SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) as post_count FROM games g WHERE 1=1'''
@@ -1495,18 +936,18 @@ async def read_root(request: Request, q: str = "", genre: str = "", platform: st
     return render_page(request, INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
 
 @app.get("/games/random")
-async def random_game():
+def random_game():
     with get_db_connection() as conn:
         game = conn.execute('SELECT id FROM games ORDER BY RANDOM() LIMIT 1').fetchone()
     if game: return RedirectResponse(url=f"/games/{game['id']}", status_code=303)
     return RedirectResponse(url="/", status_code=303)
 
 @app.get("/games/new")
-async def new_game_form(request: Request, title: str = ""):
+def new_game_form(request: Request, title: str = ""):
     return render_page(request, NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge", title=title)
 
 @app.post("/games/new")
-async def create_game(
+def create_game(
     request: Request,
     title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), image_base64: str = Form(""),
     developer_x_id: str = Form(""), username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...),
@@ -1532,42 +973,49 @@ async def create_game(
         conn.commit()
     
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
-    c = request.cookies.get("my_posts", "")
-    res.set_cookie(key="my_posts", value=f"{c},{post_id}" if c else str(post_id), max_age=60*60*24*365)
+    
+    # 署名付きCookieに更新
+    my_posts = get_secure_cookie_list(request, "my_posts")
+    my_posts.append(post_id)
+    set_secure_cookie_list(res, "my_posts", my_posts)
     return res
 
 @app.get("/games/{game_id}/edit")
-async def edit_game_form(request: Request, game_id: int):
+def edit_game_form(request: Request, game_id: int):
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
     if not game: raise HTTPException(status_code=404, detail="Game not found")
     return render_page(request, EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/edit")
-async def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form(""), existing_image_url: str = Form("")):
+def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form("")):
     if image_base64 and len(image_base64) > 6600000:
         return HTMLResponse("<script>alert('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。');history.back();</script>")
 
-    image_url = existing_image_url
-    if image_base64:
-        new_url = upload_image_to_supabase(image_base64)
-        if new_url: image_url = new_url
-
     with get_db_connection() as conn:
+        # existing_image_url は信用せず、必ずDBの現在値を取得する
+        game = conn.execute('SELECT image_url FROM games WHERE id = %s', (game_id,)).fetchone()
+        if not game: raise HTTPException(status_code=404)
+        
+        image_url = game['image_url']
+        if image_base64:
+            new_url = upload_image_to_supabase(image_base64)
+            if new_url: image_url = new_url
+
         conn.execute('UPDATE games SET title = %s, description = %s, genre = %s, platform = %s, image_url = %s, developer_x_id = %s WHERE id = %s', (title, description, genre, platform, image_url, developer_x_id, game_id))
         conn.commit()
     return RedirectResponse(url=f"/games/{game_id}", status_code=303)
 
 @app.get("/games/{game_id}")
-async def read_game(request: Request, game_id: int, sort: str = "likes"):
+def read_game(request: Request, game_id: int, sort: str = "likes"):
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
         if not game: raise HTTPException(status_code=404, detail="Game not found")
         order_str = 'created_at DESC' if sort == 'new' else '(likes + wanna_play + agree) DESC, created_at DESC'
         posts = conn.execute(f'SELECT * FROM posts WHERE game_id = %s ORDER BY {order_str}', (game_id,)).fetchall()
     
-    my_posts = [int(x) for x in request.cookies.get("my_posts", "").split(",") if x.isdigit()]
-    bookmarks = [int(x) for x in request.cookies.get("bookmarks", "").split(",") if x.isdigit()]
+    my_posts = get_secure_cookie_list(request, "my_posts")
+    bookmarks = get_secure_cookie_list(request, "bookmarks")
     
     game_title_tag = f"{game['title']} の評価・感想・ネタバレなし布教 - Oshi-Ge"
     og_desc = game['description'] if game['description'] else f"『{game['title']}』のおすすめ布教ページです。ネタバレなしで魅力をお伝えします。"
@@ -1580,69 +1028,98 @@ async def read_game(request: Request, game_id: int, sort: str = "likes"):
     return render_page(request, GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img, game_schema=game)
 
 @app.post("/games/{game_id}/posts")
-async def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
+def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
     if not check_rate_limit(request):
         return HTMLResponse("<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>")
     
     points_str = ",".join(oshi_points)
     with get_db_connection() as conn:
+        # game_idの存在確認
+        if not conn.execute('SELECT id FROM games WHERE id = %s', (game_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Game not found")
+
         cursor = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str))
         post_id = cursor.fetchone()["id"]
         conn.commit()
         
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
-    c = request.cookies.get("my_posts", "")
-    res.set_cookie(key="my_posts", value=f"{c},{post_id}" if c else str(post_id), max_age=60*60*24*365)
+    my_posts = get_secure_cookie_list(request, "my_posts")
+    my_posts.append(post_id)
+    set_secure_cookie_list(res, "my_posts", my_posts)
     return res
 
 @app.get("/games/{game_id}/posts/{post_id}/edit")
-async def edit_post_form(request: Request, game_id: int, post_id: int):
-    if post_id not in [int(x) for x in request.cookies.get("my_posts", "").split(",") if x.isdigit()]: raise HTTPException(status_code=403, detail="権限がありません。")
+def edit_post_form(request: Request, game_id: int, post_id: int):
+    my_posts = get_secure_cookie_list(request, "my_posts")
+    if post_id not in my_posts: 
+        return HTMLResponse(f"<script>alert('投稿の編集権限が確認できませんでした（Cookieが無効化されている可能性があります）。');location.href='/games/{game_id}';</script>")
+    
     with get_db_connection() as conn:
         post = conn.execute('SELECT * FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
     if not post: raise HTTPException(status_code=404)
     return render_page(request, EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/posts/{post_id}/edit")
-async def update_post(request: Request, game_id: int, post_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
-    if post_id not in [int(x) for x in request.cookies.get("my_posts", "").split(",") if x.isdigit()]: raise HTTPException(status_code=403)
-    points_str = ",".join(oshi_points)
+def update_post(
+    request: Request,
+    game_id: int,
+    post_id: int,
+    username: str = Form(...),
+    catchphrase: str = Form(...),
+    target_audience: str = Form(""),
+    play_time: str = Form(""),
+    content: str = Form(...),
+    spoiler_level: int = Form(...),
+    oshi_points: List[str] = Form(default=[])
+):
+    my_posts = get_secure_cookie_list(request, "my_posts")
+    if post_id not in my_posts:
+        return HTMLResponse(f"<script>alert('投稿の編集権限が確認できませんでした（Cookieが無効化されている可能性があります）。');location.href='/games/{game_id}';</script>")
+    
+    points_str = ",".join(oshi_points) if oshi_points else ""
     with get_db_connection() as conn:
         conn.execute('''UPDATE posts SET username = %s, catchphrase = %s, target_audience = %s, play_time = %s, content = %s, spoiler_level = %s, oshi_points = %s WHERE id = %s AND game_id = %s''', (username, catchphrase, target_audience, play_time, content, spoiler_level, points_str, post_id, game_id))
         conn.commit()
     return RedirectResponse(url=f"/games/{game_id}", status_code=303)
 
 @app.post("/posts/{post_id}/report")
-async def report_post(post_id: int, reason: str = Form(...)):
+def report_post(post_id: int, reason: str = Form(...)):
     with get_db_connection() as conn:
+        if not conn.execute('SELECT id FROM posts WHERE id = %s', (post_id,)).fetchone():
+            raise HTTPException(status_code=404)
         conn.execute('INSERT INTO reports (post_id, reason) VALUES (%s, %s)', (post_id, reason))
         conn.commit()
     return JSONResponse({"status": "ok"})
 
 @app.post("/games/{game_id}/posts/{post_id}/react/{react_type}")
-async def react_post(game_id: int, post_id: int, react_type: str):
+def react_post(game_id: int, post_id: int, react_type: str):
     valid_types = ["likes", "wanna_play", "agree"]
     if react_type not in valid_types:
         raise HTTPException(status_code=400)
         
     with get_db_connection() as conn:
+        # game_idとpost_idの整合性確認
+        if not conn.execute('SELECT id FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone():
+            raise HTTPException(status_code=404)
+            
         cursor = conn.execute(f'UPDATE posts SET {react_type} = {react_type} + 1 WHERE id = %s RETURNING {react_type}', (post_id,))
         count = cursor.fetchone()[react_type]
         conn.commit()
     return {"count": count}
 
 @app.post("/games/{game_id}/bookmark")
-async def toggle_bookmark(request: Request, game_id: int):
-    bookmarks = [int(x) for x in request.cookies.get("bookmarks", "").split(",") if x.isdigit()]
+def toggle_bookmark(request: Request, game_id: int):
+    bookmarks = get_secure_cookie_list(request, "bookmarks")
     is_bookmarked = False
     if game_id in bookmarks: bookmarks.remove(game_id)
     else: bookmarks.append(game_id); is_bookmarked = True
+    
     res = JSONResponse(content={"bookmarked": is_bookmarked})
-    res.set_cookie("bookmarks", ",".join(map(str, bookmarks)), max_age=60*60*24*365)
+    set_secure_cookie_list(res, "bookmarks", bookmarks)
     return res
 
 @app.post("/requests")
-async def create_request(request: Request, title: str = Form(...), username: str = Form("名無しのゲーマー")):
+def create_request(request: Request, title: str = Form(...), username: str = Form("名無しのゲーマー")):
     if not check_rate_limit(request):
         return HTMLResponse("<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>")
     with get_db_connection() as conn:
@@ -1651,9 +1128,9 @@ async def create_request(request: Request, title: str = Form(...), username: str
     return RedirectResponse(url="/", status_code=303)
 
 @app.get("/mypage")
-async def mypage(request: Request):
-    my_posts_ids = [int(x) for x in request.cookies.get("my_posts", "").split(",") if x.isdigit()]
-    bookmarks = [int(x) for x in request.cookies.get("bookmarks", "").split(",") if x.isdigit()]
+def mypage(request: Request):
+    my_posts_ids = get_secure_cookie_list(request, "my_posts")
+    bookmarks = get_secure_cookie_list(request, "bookmarks")
     
     my_posts_list = []
     bookmarked_games = []
