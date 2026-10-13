@@ -11,6 +11,7 @@ import ipaddress
 import json
 import secrets
 import hashlib
+import threading
 from collections import defaultdict
 from functools import lru_cache
 from typing import List, Optional
@@ -23,7 +24,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from jinja2 import Environment
 from markupsafe import Markup
 from itsdangerous import URLSafeSerializer
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 import psycopg
 from psycopg import errors as pgerrors
@@ -43,6 +44,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+TRUSTED_PROXIES = int(os.environ.get("TRUSTED_PROXIES", "2"))
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
@@ -73,6 +75,86 @@ OSHI_POINTS = ["📖 ストーリーが最高", "👤 キャラが魅力的", "�
 REPORT_REASONS = ["ネタバレ", "誹謗中傷", "スパム", "その他"]
 ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
 
+FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
+FONT_PATH = "/tmp/NotoSansCJKjp-Bold.otf"
+_font_lock = threading.Lock()
+
+def ensure_font() -> bool:
+    if os.path.exists(FONT_PATH):
+        return True
+    with _font_lock:
+        if os.path.exists(FONT_PATH):
+            return True
+        try:
+            req = urllib.request.Request(FONT_URL, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+            with open(FONT_PATH + ".tmp", "wb") as f:
+                f.write(data)
+            os.replace(FONT_PATH + ".tmp", FONT_PATH)
+            return True
+        except Exception:
+            logger.exception("font download failed")
+            return False
+
+def _wrap(draw, text, font, max_w, max_lines):
+    lines, line = [], ""
+    for ch in text or "":
+        if draw.textlength(line + ch, font=font) > max_w and line:
+            lines.append(line)
+            line = ch
+            if len(lines) >= max_lines:
+                break
+        else:
+            line += ch
+    if len(lines) < max_lines and line:
+        lines.append(line)
+    if lines and len("".join(lines)) < len(text or ""):
+        last = lines[-1]
+        while last and draw.textlength(last + "…", font=font) > max_w:
+            last = last[:-1]
+        lines[-1] = last + "…"
+    return lines
+
+@lru_cache(maxsize=200)
+def build_ogp(title: str, genre: str, catch: str, image_url: str) -> bytes:
+    W, H = 1200, 630
+    img = Image.new("RGB", (W, H), "#0f172a")
+    if image_url:
+        data, _ = fetch_image_bytes(image_url)
+        if data:
+            try:
+                bg = Image.open(io.BytesIO(data)).convert("RGB")
+                scale = max(W / bg.width, H / bg.height)
+                bg = bg.resize((int(bg.width * scale), int(bg.height * scale)))
+                left, top = (bg.width - W) // 2, (bg.height - H) // 2
+                bg = bg.crop((left, top, left + W, top + H)).filter(ImageFilter.GaussianBlur(4))
+                img = Image.blend(bg, Image.new("RGB", (W, H), "#020617"), 0.7)
+            except Exception:
+                pass
+    d = ImageDraw.Draw(img)
+    has_font = ensure_font()
+    def F(size):
+        return ImageFont.truetype(FONT_PATH, size) if has_font else ImageFont.load_default()
+
+    d.rectangle((0, 60, 16, 130), fill="#f59e0b")
+    d.text((50, 62), "OSHI-GE", font=F(56), fill="#f59e0b")
+    if genre:
+        d.text((50, 150), genre, font=F(30), fill="#fcd34d")
+    y = 210
+    for t in _wrap(d, title, F(72), 1100, 2):
+        d.text((50, y), t, font=F(72), fill="#ffffff")
+        y += 90
+    y += 15
+    if catch:
+        for t in _wrap(d, f"「{catch}」", F(40), 1100, 3):
+            d.text((50, y), t, font=F(40), fill="#fcd34d")
+            y += 55
+    d.text((50, H - 60), "ネタバレなしゲーム布教サイト", font=F(28), fill="#94a3b8")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return buf.getvalue()
+
 env = Environment(autoescape=True, finalize=lambda x: "" if x is None else x)
 
 @lru_cache(maxsize=500)
@@ -85,10 +167,15 @@ ip_last_post_time = defaultdict(float)
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("X-Forwarded-For")
     if xff:
-        return xff.split(",")[0].strip()
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            idx = max(0, len(parts) - TRUSTED_PROXIES)
+            return parts[idx]
     return request.client.host if request.client else "unknown"
 
 def check_rate_limit(request: Request) -> bool:
+    # 接続元IPの確認用ログ (確認できたら削除可能)
+    logger.info(f"XFF={request.headers.get('X-Forwarded-For')} -> {get_client_ip(request)}")
     last = ip_last_post_time.get(get_client_ip(request), 0.0)
     return time.time() - last >= POST_COOLDOWN
 
@@ -1751,64 +1838,24 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
 # ---------------------------------------------------------------------------
 # OGP Dynamic Image Routes
 # ---------------------------------------------------------------------------
-@app.get("/ogp.png")
-def generate_top_ogp(request: Request):
-    """トップページ用の動的OGP画像生成"""
-    W, H = 1200, 630
-    img = Image.new("RGB", (W, H), color="#0f172a")
-    draw = ImageDraw.Draw(img)
-    
-    # 背景のグラデーション風装飾やアクセント
-    draw.rectangle([0, 0, W, 16], fill="#f59e0b")
-    
-    # テキスト描画 (デフォルトフォント使用)
-    try:
-        font_large = ImageFont.truetype(FONT_PATH, 55)
-        font_sub = ImageFont.truetype(FONT_PATH, 30)
-    except Exception:
-        font_large = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
+OGP_HEADERS = {"Cache-Control": "public, max-age=86400"}
 
-    draw.text((80, 150), "🎮 Oshi-Ge（推しゲー）", fill="#f59e0b", font=font_large)
-    draw.text((80, 250), "誰かの人生を変える1本を。", fill="#f8fafc", font=font_large)
-    draw.text((80, 350), "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。", fill="#94a3b8", font=font_sub)
-    
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return Response(content=buf.getvalue(), media_type="image/png")
+@app.get("/ogp.png")
+def ogp_default():
+    png = build_ogp("誰かの人生を変える1本を。", "", "未プレイの人にこそ読んでほしい、ゲーム布教コミュニティ", "")
+    return Response(content=png, media_type="image/png", headers=OGP_HEADERS)
 
 @app.get("/games/{game_id}/ogp.png")
-def generate_game_ogp(request: Request, game_id: int):
-    """ゲーム詳細ページ用の動的OGP画像生成"""
+def ogp_game(game_id: int):
     with get_db_connection() as conn:
-        game = conn.execute("SELECT title, genre FROM games WHERE id = %s", (game_id,)).fetchone()
-    
-    title = game["title"] if game else "神ゲー布教"
-    genre = game["genre"] if game else "ゲーム"
-
-    W, H = 1200, 630
-    img = Image.new("RGB", (W, H), color="#0f172a")
-    draw = ImageDraw.Draw(img)
-    
-    draw.rectangle([0, 0, W, 16], fill="#f59e0b")
-    
-    try:
-        font_title = ImageFont.truetype(FONT_PATH, 50)
-        font_badge = ImageFont.truetype(FONT_PATH, 28)
-        font_sub = ImageFont.truetype(FONT_PATH, 26)
-    except Exception:
-        font_title = ImageFont.load_default()
-        font_badge = ImageFont.load_default()
-        font_sub = ImageFont.load_default()
-
-    draw.text((80, 100), f"🎮 {genre}", fill="#f59e0b", font=font_badge)
-    draw.text((80, 180), f"『{title}』", fill="#f8fafc", font=font_title)
-    draw.text((80, 320), "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教", fill="#94a3b8", font=font_sub)
-    draw.text((80, 520), "Oshi-Ge 社区", fill="#64748b", font=font_sub)
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return Response(content=buf.getvalue(), media_type="image/png")
+        game = conn.execute("SELECT title, genre, image_url FROM games WHERE id = %s", (game_id,)).fetchone()
+        if not game:
+            raise HTTPException(status_code=404)
+        latest = conn.execute(
+            "SELECT catchphrase FROM posts WHERE game_id = %s ORDER BY created_at DESC LIMIT 1", (game_id,)
+        ).fetchone()
+    png = build_ogp(game["title"] or "", game["genre"] or "", (latest or {}).get("catchphrase") or "", game["image_url"] or "")
+    return Response(content=png, media_type="image/png", headers=OGP_HEADERS)
 
 
 # ---------------------------------------------------------------------------
