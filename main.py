@@ -10,10 +10,11 @@ import socket
 import ipaddress
 import json
 import secrets
+import hashlib
 from collections import defaultdict
 from functools import lru_cache
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlencode
 
 import uvicorn
 from fastapi import FastAPI, Request, Form, HTTPException, Response, Depends
@@ -41,7 +42,7 @@ security = HTTPBasic()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD") # 未設定時は管理画面を無効化
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
@@ -66,27 +67,11 @@ def get_db_connection():
         return psycopg.connect(DATABASE_URL, row_factory=dict_row, sslmode="require")
     return pool.connection()
 
-
-FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
-FONT_PATH = "NotoSansCJKjp-Bold.otf"
-
 GENRES = ["RPG", "アクション", "アドベンチャー", "シミュレーション", "FPS / TPS", "パズル", "ノベル", "ホラー", "インディー", "その他 / 不明"]
 PLATFORMS = ["PC", "Switch", "Switch2", "PS5", "Xbox", "スマホ", "その他"]
 OSHI_POINTS = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"]
 REPORT_REASONS = ["ネタバレ", "誹謗中傷", "スパム", "その他"]
 ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
-
-def download_font():
-    if not os.path.exists(FONT_PATH):
-        try:
-            req = urllib.request.Request(FONT_URL, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req, timeout=30) as response:
-                with open(FONT_PATH, 'wb') as f:
-                    f.write(response.read())
-        except Exception:
-            logger.exception("font download failed")
-
-download_font()
 
 env = Environment(autoescape=True, finalize=lambda x: "" if x is None else x)
 
@@ -100,7 +85,7 @@ ip_last_post_time = defaultdict(float)
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("X-Forwarded-For")
     if xff:
-        return xff.split(",")[-1].strip()
+        return xff.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 def check_rate_limit(request: Request) -> bool:
@@ -161,11 +146,11 @@ def set_cookie_safe(res: Response, key: str, values: List[int]):
     res.set_cookie(key=key, value=signed_val, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax", secure=True)
 
 # ---------------------------------------------------------------------------
-# Auth Helper Functions
+# Auth Helper Functions & Middleware
 # ---------------------------------------------------------------------------
-def set_auth_cookies(res: Response, session):
-    res.set_cookie("sb-access-token", session.access_token, max_age=session.expires_in, httponly=True, samesite="lax", secure=True)
-    res.set_cookie("sb-refresh-token", session.refresh_token, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax", secure=True)
+def set_auth_cookies(res: Response, access_token: str, refresh_token: str, expires_in: int = 3600):
+    res.set_cookie("sb-access-token", access_token, max_age=int(expires_in), httponly=True, samesite="lax", secure=True)
+    res.set_cookie("sb-refresh-token", refresh_token, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax", secure=True)
 
 def clear_auth_cookies(res: Response):
     res.delete_cookie("sb-access-token")
@@ -200,11 +185,20 @@ def get_user_id(request: Request) -> Optional[str]:
             session_res = supabase.auth.refresh_session(refresh_token)
             if session_res and session_res.user:
                 user_id = session_res.user.id
+                request.state.new_session = session_res.session
         except Exception as e:
             logger.warning(f"Session refresh failed: {e}")
 
     request.state.user_id = user_id
     return user_id
+
+@app.middleware("http")
+async def persist_refreshed_session(request: Request, call_next):
+    response = await call_next(request)
+    s = getattr(request.state, "new_session", None)
+    if s:
+        set_auth_cookies(response, s.access_token, s.refresh_token, s.expires_in)
+    return response
 
 def is_owner(request: Request, post: dict, user_id: Optional[str]) -> bool:
     if user_id and post.get("user_id") is not None and str(post["user_id"]) == user_id:
@@ -1756,35 +1750,54 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
     return HTMLResponse(html)
 
 # ---------------------------------------------------------------------------
-# Auth / Login Routing
+# Auth / Login Routing (Stateless PKCE)
 # ---------------------------------------------------------------------------
+def _pkce_pair():
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()
+    ).rstrip(b"=").decode()
+    return verifier, challenge
+
 @app.post("/auth/login/{provider}")
 def login(request: Request, provider: str):
     if provider not in ["google", "x"]:
         raise HTTPException(status_code=400, detail="Invalid provider")
-    if not supabase:
+    if not SUPABASE_URL:
         return alert_back('Supabaseの設定が存在しないためログインできません。')
         
-    redirect_url = f"{get_base_url(request)}/auth/callback"
-    try:
-        res = supabase.auth.sign_in_with_oauth({
-            "provider": provider,
-            "options": {"redirect_to": redirect_url}
-        })
-        return RedirectResponse(url=res.url, status_code=303)
-    except Exception as e:
-        logger.error(f"Login failed: {e}")
-        return alert_back('ログイン処理の開始に失敗しました。')
+    verifier, challenge = _pkce_pair()
+    qs = urlencode({
+        "provider": provider,
+        "redirect_to": f"{get_base_url(request)}/auth/callback",
+        "code_challenge": challenge,
+        "code_challenge_method": "s256",
+    })
+    res = RedirectResponse(url=f"{SUPABASE_URL}/auth/v1/authorize?{qs}", status_code=303)
+    res.set_cookie("oshige-pkce", serializer.dumps(verifier), max_age=600, httponly=True, samesite="lax", secure=True)
+    return res
+
+def exchange_code(code: str, verifier: str) -> dict:
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/auth/v1/token?grant_type=pkce",
+        data=json.dumps({"auth_code": code, "code_verifier": verifier}).encode(),
+        headers={"Content-Type": "application/json", "apikey": SUPABASE_KEY},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
 
 @app.get("/auth/callback")
 def auth_callback(request: Request, code: str = None):
-    if not code or not supabase:
+    raw = request.cookies.get("oshige-pkce")
+    if not code or not raw:
         return RedirectResponse(url="/mypage", status_code=303)
     try:
-        session_data = supabase.auth.exchange_code_for_session({"auth_code": code})
+        verifier = serializer.loads(raw)
+        data = exchange_code(code, verifier)
         res = RedirectResponse(url="/auth/merge", status_code=303)
-        if session_data and session_data.session:
-            set_auth_cookies(res, session_data.session)
+        set_auth_cookies(res, data["access_token"], data["refresh_token"], data.get("expires_in", 3600))
+        res.delete_cookie("oshige-pkce")
         return res
     except Exception as e:
         logger.error(f"Auth callback error: {e}")
@@ -1888,9 +1901,12 @@ def api_games_list():
 @app.get("/")
 def read_root(request: Request, q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
     q = clip(q, 100)
-    order_clause = "g.created_at DESC"
+    
+    # 🕒 最新順のときは「ゲームに紐づく最新の布教投稿日時（なければゲーム登録日時）」を基準にソート
+    order_clause = "COALESCE((SELECT MAX(created_at) FROM posts p WHERE p.game_id = g.id), g.created_at) DESC"
     if sort == "posts":
         order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
+
     query = '''SELECT g.*, (SELECT catchphrase FROM posts p WHERE p.game_id = g.id ORDER BY p.created_at DESC LIMIT 1) as latest_catchphrase, (SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) as post_count FROM games g WHERE 1=1'''
     params = []
 
@@ -1958,7 +1974,7 @@ def read_genre_page(request: Request, genre_slug: str, sort: str = "new"):
         
     genre_name = GENRE_SLUGS[genre_slug]
     
-    order_clause = "g.created_at DESC"
+    order_clause = "COALESCE((SELECT MAX(created_at) FROM posts p WHERE p.game_id = g.id), g.created_at) DESC"
     if sort == "posts":
         order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
         
@@ -2063,6 +2079,9 @@ def create_game(
 
 @app.get("/games/{game_id}/edit")
 def edit_game_form(request: Request, game_id: int):
+    user_id = get_user_id(request)
+    if not user_id:
+        return alert_back('ゲーム情報の編集にはログインが必要です。')
     with get_db_connection() as conn:
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
     if not game:
@@ -2071,6 +2090,9 @@ def edit_game_form(request: Request, game_id: int):
 
 @app.post("/games/{game_id}/edit")
 def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form("")):
+    user_id = get_user_id(request)
+    if not user_id:
+        return alert_back('ゲーム情報の編集にはログインが必要です。')
     if image_base64 and len(image_base64) > 6600000:
         return alert_back('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。')
 
