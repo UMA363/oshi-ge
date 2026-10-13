@@ -41,7 +41,7 @@ security = HTTPBasic()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD") # 未設定時は管理画面を無効化
 
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
@@ -57,7 +57,8 @@ serializer = URLSafeSerializer(SECRET_KEY)
 pool = None
 if DATABASE_URL:
     try:
-        pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=10, kwargs={"row_factory": dict_row, "sslmode": "require"})
+        # prepare_threshold: None を追加し、prepared statementエラーを回避
+        pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=10, kwargs={"row_factory": dict_row, "sslmode": "require", "prepare_threshold": None})
     except Exception as e:
         logger.error(f"Failed to initialize ConnectionPool: {e}")
 
@@ -160,19 +161,62 @@ def set_cookie_safe(res: Response, key: str, values: List[int]):
     signed_val = serializer.dumps(values)
     res.set_cookie(key=key, value=signed_val, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax", secure=True)
 
-def get_user_id(request: Request) -> Optional[str]:
-    access_token = request.cookies.get("sb-access-token")
-    if not access_token or not supabase:
-        return None
-    try:
-        user = supabase.auth.get_user(access_token)
-        return user.user.id if user and user.user else None
-    except Exception:
-        return None
+# ---------------------------------------------------------------------------
+# Auth Helper Functions
+# ---------------------------------------------------------------------------
+def set_auth_cookies(res: Response, session):
+    res.set_cookie("sb-access-token", session.access_token, max_age=session.expires_in, httponly=True, samesite="lax", secure=True)
+    res.set_cookie("sb-refresh-token", session.refresh_token, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax", secure=True)
 
 def clear_auth_cookies(res: Response):
     res.delete_cookie("sb-access-token")
     res.delete_cookie("sb-refresh-token")
+
+def get_user_id(request: Request) -> Optional[str]:
+    """トークンを検証し、必要ならリフレッシュ。結果はリクエストのstateにキャッシュする"""
+    if hasattr(request.state, "user_id"):
+        return request.state.user_id
+
+    access_token = request.cookies.get("sb-access-token")
+    refresh_token = request.cookies.get("sb-refresh-token")
+    
+    if not access_token and not refresh_token:
+        request.state.user_id = None
+        return None
+        
+    if not supabase:
+        request.state.user_id = None
+        return None
+
+    user_id = None
+    try:
+        if access_token:
+            user_res = supabase.auth.get_user(access_token)
+            if user_res and user_res.user:
+                user_id = user_res.user.id
+    except Exception:
+        pass
+
+    # アクセストークンが期限切れ等で使えず、リフレッシュトークンがある場合
+    if not user_id and refresh_token:
+        try:
+            session_res = supabase.auth.refresh_session(refresh_token)
+            if session_res and session_res.user:
+                user_id = session_res.user.id
+                # 注意: Cookieの更新はミドルウェア等で行うのが理想的ですが、
+                # 次回の明示的なアクション（投稿やページ遷移）時に反映されます。
+        except Exception as e:
+            logger.warning(f"Session refresh failed: {e}")
+
+    request.state.user_id = user_id
+    return user_id
+
+def is_owner(request: Request, post: dict, user_id: Optional[str]) -> bool:
+    """投稿の編集権限をチェックする"""
+    if user_id and post.get("user_id") is not None and str(post["user_id"]) == user_id:
+        return True
+    return post["id"] in parse_id_cookie(request, "my_posts")
+
 
 def init_db():
     try:
@@ -240,7 +284,7 @@ def is_safe_url(url: str) -> bool:
         for res in addr_info:
             ip_str = res[4][0]
             ip = ipaddress.ip_address(ip_str)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            if not ip.is_global:
                 return False
         return True
     except Exception:
@@ -772,9 +816,9 @@ async function drawPromoCard() {
     let panelY = catchY + (catchLines * 85) + 30;
     if(panelY < 600) panelY = 600;
 
-    let simY = panelY + 70;
+    let currentY = panelY + 70;
     const titleLines = getLines(title, 920, '900 45px "Noto Sans JP", sans-serif', 2);
-    simY += titleLines * 55 + 30;
+    currentY += titleLines * 55 + 30;
 
     if (contentRaw) {
         ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
@@ -791,6 +835,82 @@ async function drawPromoCard() {
         currentY += 60;
     }
 
+    const tags = [];
+    if(playTime) tags.push(playTime);
+    if(genre) tags.push(genre);
+    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
+    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
+    if(tags.length) { currentY += 42 + 40; }
+
+    const panelH = currentY - panelY + 20;
+    const H = Math.max(1350, panelY + panelH + 100);
+    
+    canvas.width = W; canvas.height = H;
+
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+    if (img) {
+        ctx.drawImage(img, 0, 0, W, drawH);
+        const fadeStart = Math.max(0, drawH - 250);
+        const fade = ctx.createLinearGradient(0, fadeStart, 0, drawH);
+        fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(1, '#020617');
+        ctx.fillStyle = fade; ctx.fillRect(0, fadeStart, W, drawH - fadeStart);
+        if (drawH < H) {
+            ctx.fillStyle = '#020617';
+            ctx.fillRect(0, drawH, W, H - drawH);
+        }
+    } else {
+        const glow = ctx.createRadialGradient(W/2, 300, 50, W/2, 300, 600);
+        glow.addColorStop(0, 'rgba(245,158,11,0.2)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
+        ctx.fillStyle = glow; ctx.fillRect(0, 0, W, 900);
+    }
+
+    ctx.fillStyle = '#f59e0b'; ctx.fillRect(0, 40, 12, 50);
+    ctx.font = '900 36px "Noto Sans JP", sans-serif'; ctx.fillText('OSHI-GE', 40, 78);
+
+    let badgeText = '🟢 ネタバレなし'; let badgeColor = '#10b981'; let badgeBg = 'rgba(16, 185, 129, 0.2)';
+    if (spoiler === 1) { badgeText = '🟡 軽微なネタバレあり'; badgeColor = '#f59e0b'; badgeBg = 'rgba(245, 158, 11, 0.2)'; }
+    if (spoiler === 2) { badgeText = '🔴 ネタバレあり'; badgeColor = '#ef4444'; badgeBg = 'rgba(239, 68, 68, 0.2)'; }
+    ctx.font = '900 24px "Noto Sans JP", sans-serif';
+    const bw = ctx.measureText(badgeText).width + 40;
+    drawRoundRect(ctx, W - bw - 40, 40, bw, 50, 25);
+    ctx.fillStyle = badgeBg; ctx.fill();
+    ctx.strokeStyle = badgeColor; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = badgeColor; ctx.fillText(badgeText, W - bw - 20, 73);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 15;
+    ctx.font = '900 65px "Noto Sans JP", sans-serif';
+    wrapCanvasText(ctx, catchphrase, 50, catchY, 980, 85, 3);
+    ctx.shadowBlur = 0;
+
+    drawRoundRect(ctx, 40, panelY, 1000, panelH, 20);
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
+
+    // 再描画用（テキスト類）
+    let drawTextY = panelY + 70;
+    ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
+    const drawnTitleLines = wrapCanvasText(ctx, title, 80, drawTextY, 920, 55, 2);
+    drawTextY += drawnTitleLines * 55 + 30;
+
+    if (contentRaw) {
+        ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
+        const drawnContentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, drawTextY, 920, 45, 4);
+        drawTextY += drawnContentLines * 45 + 40;
+    }
+
+    if (target) {
+        ctx.fillStyle = '#94a3b8'; ctx.font = '700 22px "Noto Sans JP", sans-serif';
+        ctx.fillText('👤 こんな人におすすめ', 80, drawTextY);
+        drawTextY += 35;
+        ctx.fillStyle = '#f8fafc'; ctx.font = '900 28px "Noto Sans JP", sans-serif';
+        wrapCanvasText(ctx, target, 100, drawTextY, 880, 35, 1);
+        drawTextY += 60;
+    }
+
     if(tags.length) {
         let tx = 80;
         ctx.font = '700 22px "Noto Sans JP", sans-serif';
@@ -798,9 +918,9 @@ async function drawPromoCard() {
             const tagStr = '#' + tags[i];
             const tw = ctx.measureText(tagStr).width + 30;
             if(tx + tw > 1000) break;
-            drawRoundRect(ctx, tx, currentY, tw, 42, 21);
+            drawRoundRect(ctx, tx, drawTextY, tw, 42, 21);
             ctx.fillStyle = 'rgba(245, 158, 11, 0.15)'; ctx.fill();
-            ctx.fillStyle = '#fcd34d'; ctx.fillText(tagStr, tx + 15, currentY + 30);
+            ctx.fillStyle = '#fcd34d'; ctx.fillText(tagStr, tx + 15, drawTextY + 30);
             tx += tw + 15;
         }
     }
@@ -863,26 +983,6 @@ function sharePromoCardToX() {
 }
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePromoCard(); });
-
-// SupabaseのOAuthコールバック（URLフラグメント）をキャッチしてCookieに保存する処理を追加
-window.addEventListener("DOMContentLoaded", () => {
-    const hash = window.location.hash;
-    if (hash && hash.includes("access_token=")) {
-        const params = new URLSearchParams(hash.substring(1));
-        const accessToken = params.get("access_token");
-        const refreshToken = params.get("refresh_token");
-        const expiresIn = params.get("expires_in") || 3600;
-
-        if (accessToken) {
-            document.cookie = `sb-access-token=${accessToken}; path=/; max-age=${expiresIn}; SameSite=Lax; Secure`;
-            if (refreshToken) {
-                document.cookie = `sb-refresh-token=${refreshToken}; path=/; max-age=2592000; SameSite=Lax; Secure`;
-            }
-            window.location.hash = ""; // 画面のチラつき防止
-            window.location.href = "/auth/merge"; // マージ処理へリダイレクト
-        }
-    }
-});
 """
 
 BASE_HTML = """
@@ -1247,7 +1347,7 @@ GAME_HTML = """
             <span class="post-author">👤 {{ post.username }}</span>
             <div style="display: flex; align-items: center; gap: 1rem;">
                 <span>{{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}</span>
-                {% if post.id in my_posts or (user_id and post.user_id == user_id) %}<a href="/games/{{ game.id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">⚙ 編集</a>{% endif %}
+                {% if post.id in my_posts or (user_id and post.user_id and post.user_id|string == user_id) %}<a href="/games/{{ game.id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">⚙ 編集</a>{% endif %}
             </div>
         </div>
         {% if post.catchphrase %}
@@ -1595,9 +1695,12 @@ PRIVACY_HTML = """
     当サイトのコンテンツ・情報につきまして、可能な限り正確な情報を掲載するよう努めておりますが、誤情報が入り込んだり、情報が古くなっていることもございます。<br>
     当サイトに掲載された内容によって生じた損害等の一切の責任を負いかねますのでご了承ください。</p>
     
-    <h3 style="color: var(--accent);">ユーザー投稿データの取り扱い</h3>
+    <h3 style="color: var(--accent);">ユーザー投稿データおよびアカウント情報の取り扱い</h3>
     <p>当サイトはユーザーが自由にゲームの布教（感想・レビュー等）を投稿できるサービスです。投稿された文章に関する責任は投稿者に帰属します。スパム、誹謗中傷、極端なネタバレなど、管理者が不適切と判断したコンテンツは予告なく削除・非表示にする場合があります。<br>
     また、ログイン機能（Google連携やX連携等）を利用した場合、当サイトは認証に必要な最小限の識別子（UUID等）のみを保持し、ユーザーのSNSアカウント自体に勝手に投稿したり、パスワードを収集することはありません。</p>
+    
+    <h3 style="color: var(--accent);">アカウントの削除について</h3>
+    <p>当サイトに紐付けたアカウントデータ（およびご自身の投稿履歴）の削除をご希望の場合は、サイト管理者（公式Xアカウント等）まで個別にご連絡いただくことで対応いたします。</p>
 </div>
 """
 
@@ -1669,8 +1772,7 @@ def login(request: Request, provider: str):
     if not supabase:
         return alert_back('Supabaseの設定が存在しないためログインできません。')
         
-    # コールバック先を直接マイページに向ける
-    redirect_url = f"{get_base_url(request)}/mypage"
+    redirect_url = f"{get_base_url(request)}/auth/callback"
     try:
         res = supabase.auth.sign_in_with_oauth({
             "provider": provider,
@@ -1680,6 +1782,20 @@ def login(request: Request, provider: str):
     except Exception as e:
         logger.error(f"Login failed: {e}")
         return alert_back('ログイン処理の開始に失敗しました。')
+
+@app.get("/auth/callback")
+def auth_callback(request: Request, code: str = None):
+    if not code or not supabase:
+        return RedirectResponse(url="/mypage", status_code=303)
+    try:
+        session_data = supabase.auth.exchange_code_for_session({"auth_code": code})
+        res = RedirectResponse(url="/auth/merge", status_code=303)
+        if session_data and session_data.session:
+            set_auth_cookies(res, session_data.session)
+        return res
+    except Exception as e:
+        logger.error(f"Auth callback error: {e}")
+        return RedirectResponse(url="/mypage", status_code=303)
 
 @app.get("/auth/merge")
 def auth_merge(request: Request):
@@ -1694,11 +1810,13 @@ def auth_merge(request: Request):
         if my_posts:
             conn.execute("UPDATE posts SET user_id = %s WHERE id = ANY(%s) AND user_id IS NULL", (user_id, my_posts))
         
-        for gid in bookmarks:
-            try:
-                conn.execute("INSERT INTO bookmarks (user_id, game_id) VALUES (%s, %s)", (user_id, gid))
-            except pgerrors.UniqueViolation:
-                pass
+        if bookmarks:
+            conn.execute("""
+                INSERT INTO bookmarks (user_id, game_id)
+                SELECT %s::uuid, id FROM games WHERE id = ANY(%s)
+                ON CONFLICT (user_id, game_id) DO NOTHING
+            """, (user_id, bookmarks))
+            
         conn.commit()
     
     res = RedirectResponse(url="/mypage", status_code=303)
@@ -1717,7 +1835,13 @@ def logout(request: Request):
 # Admin Routing
 # ---------------------------------------------------------------------------
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
-    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
+    if not ADMIN_PASSWORD:
+        raise HTTPException(status_code=403, detail="Admin disabled: ADMIN_PASSWORD is not set in environment.")
+        
+    is_correct_username = secrets.compare_digest(credentials.username, "admin")
+    is_correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
+    
+    if not (is_correct_username and is_correct_password):
         raise HTTPException(
             status_code=401,
             detail="Incorrect username or password",
@@ -1894,6 +2018,8 @@ def create_game(
 ):
     if not check_rate_limit(request):
         return HTMLResponse(RATE_LIMIT_HTML)
+    if image_base64 and len(image_base64) > 6600000:
+        return alert_back('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。')
 
     title = clip(title, 200)
     description = clip(description, 2000)
@@ -1952,6 +2078,8 @@ def edit_game_form(request: Request, game_id: int):
 
 @app.post("/games/{game_id}/edit")
 def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form("")):
+    if image_base64 and len(image_base64) > 6600000:
+        return alert_back('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。')
 
     title = clip(title, 200)
     description = clip(description, 2000)
@@ -2046,17 +2174,13 @@ NO_EDIT_PERMISSION = "<script>alert('投稿の編集権限が確認できませ�
 def edit_post_form(request: Request, game_id: int, post_id: int):
     user_id = get_user_id(request)
     with get_db_connection() as conn:
-        post = conn.execute('SELECT * FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
+        post = conn.execute('SELECT id, user_id, username, catchphrase, target_audience, play_time, oshi_points, spoiler_level, content FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
         
     if not post:
         raise HTTPException(status_code=404)
         
-    if user_id:
-        if post["user_id"] != user_id:
-            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
-    else:
-        if post_id not in parse_id_cookie(request, "my_posts"):
-            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
+    if not is_owner(request, post, user_id):
+        return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
 
     return render_page(request, EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
 
@@ -2075,17 +2199,13 @@ def update_post(
 ):
     user_id = get_user_id(request)
     with get_db_connection() as conn:
-        post = conn.execute('SELECT user_id FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
+        post = conn.execute('SELECT id, user_id FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
         
     if not post:
         raise HTTPException(status_code=404)
         
-    if user_id:
-        if post["user_id"] != user_id:
-            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
-    else:
-        if post_id not in parse_id_cookie(request, "my_posts"):
-            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
+    if not is_owner(request, post, user_id):
+        return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
 
     username = clip(username, 50) or "名無しの布教者"
     catchphrase = clip(catchphrase, 100)
