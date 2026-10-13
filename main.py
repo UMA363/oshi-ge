@@ -6,35 +6,67 @@ import uuid
 import base64
 import logging
 import urllib.request
+import socket
+import ipaddress
+import json
+import secrets
 from collections import defaultdict
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import uvicorn
-import psycopg
-from psycopg import errors as pgerrors
-from psycopg.rows import dict_row
-from fastapi import FastAPI, Request, Form, HTTPException, Response
+from fastapi import FastAPI, Request, Form, HTTPException, Response, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from jinja2 import Environment
 from markupsafe import Markup
 from itsdangerous import URLSafeSerializer
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
+
+import psycopg
+from psycopg import errors as pgerrors
+from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+from supabase import create_client, Client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("oshige")
 
-Image.MAX_IMAGE_PIXELS = 50_000_000
+Image.MAX_IMAGE_PIXELS = 25_000_000
 
 app = FastAPI()
+security = HTTPBasic()
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123") # 管理画面のパスワード
 
-SECRET_KEY = os.environ.get("SECRET_KEY", os.urandom(24).hex())
+# Supabase Auth クライアント
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    logger.warning("SECRET_KEY is not set. Using a temporary random key. User sessions will be lost on restart.")
+    SECRET_KEY = os.urandom(24).hex()
+    
 serializer = URLSafeSerializer(SECRET_KEY)
+
+pool = None
+if DATABASE_URL:
+    try:
+        pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=10, kwargs={"row_factory": dict_row, "sslmode": "require"})
+    except Exception as e:
+        logger.error(f"Failed to initialize ConnectionPool: {e}")
+
+def get_db_connection():
+    if pool is None:
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row, sslmode="require")
+    return pool.connection()
+
 
 FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
 FONT_PATH = "NotoSansCJKjp-Bold.otf"
@@ -43,6 +75,7 @@ GENRES = ["RPG", "アクション", "アドベンチャー", "シミュレーシ
 PLATFORMS = ["PC", "Switch", "Switch2", "PS5", "Xbox", "スマホ", "その他"]
 OSHI_POINTS = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"]
 REPORT_REASONS = ["ネタバレ", "誹謗中傷", "スパム", "その他"]
+ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
 
 def download_font():
     if not os.path.exists(FONT_PATH):
@@ -58,7 +91,7 @@ download_font()
 
 env = Environment(autoescape=True, finalize=lambda x: "" if x is None else x)
 
-@lru_cache(maxsize=None)
+@lru_cache(maxsize=500)
 def get_template(source: str):
     return env.from_string(source)
 
@@ -68,7 +101,7 @@ ip_last_post_time = defaultdict(float)
 def get_client_ip(request: Request) -> str:
     xff = request.headers.get("X-Forwarded-For")
     if xff:
-        return xff.split(",")[0].strip()
+        return xff.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 def check_rate_limit(request: Request) -> bool:
@@ -85,7 +118,8 @@ def mark_posted(request: Request):
 RATE_LIMIT_HTML = "<script>alert('連続投稿は制限されています。少し時間をおいてから再度お試しください。');history.back();</script>"
 
 def alert_back(msg: str) -> HTMLResponse:
-    return HTMLResponse(f"<script>alert('{msg}');history.back();</script>")
+    safe_msg = json.dumps(msg)
+    return HTMLResponse(f"<script>alert({safe_msg});history.back();</script>")
 
 def clip(s, n: int) -> str:
     return (s or "").strip()[:n]
@@ -115,17 +149,44 @@ def parse_id_cookie(request: Request, name: str) -> List[int]:
     val = request.cookies.get(name)
     if not val: return []
     try:
-        return serializer.loads(val)
-    except:
+        parsed = serializer.loads(val)
+        if isinstance(parsed, list) and all(isinstance(x, int) for x in parsed):
+            return parsed
+        return []
+    except Exception:
         return []
 
 def set_cookie_safe(res: Response, key: str, values: List[int]):
+    values = values[-200:]
     signed_val = serializer.dumps(values)
-    res.set_cookie(key=key, value=signed_val, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax")
+    res.set_cookie(key=key, value=signed_val, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax", secure=True)
 
-def get_db_connection():
-    return psycopg.connect(DATABASE_URL, row_factory=dict_row, sslmode="require")
+# ---------------------------------------------------------------------------
+# Auth Helper Functions
+# ---------------------------------------------------------------------------
+def get_user_id(request: Request) -> Optional[str]:
+    """CookieからSupabaseのセッションを取得し、user_idを返す"""
+    access_token = request.cookies.get("sb-access-token")
+    if not access_token or not supabase:
+        return None
+    try:
+        user = supabase.auth.get_user(access_token)
+        return user.user.id if user and user.user else None
+    except Exception:
+        return None
 
+def set_auth_cookies(res: Response, session):
+    """SupabaseのセッションをCookieに保存"""
+    res.set_cookie("sb-access-token", session.access_token, max_age=session.expires_in, httponly=True, samesite="lax", secure=True)
+    res.set_cookie("sb-refresh-token", session.refresh_token, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax", secure=True)
+
+def clear_auth_cookies(res: Response):
+    res.delete_cookie("sb-access-token")
+    res.delete_cookie("sb-refresh-token")
+
+# ---------------------------------------------------------------------------
+# DB Init
+# ---------------------------------------------------------------------------
 def init_db():
     try:
         with get_db_connection() as conn:
@@ -135,13 +196,19 @@ def init_db():
             conn.execute('''CREATE TABLE IF NOT EXISTS posts (
                 id SERIAL PRIMARY KEY, game_id INTEGER REFERENCES games(id), username TEXT NOT NULL,
                 content TEXT NOT NULL, spoiler_level INTEGER DEFAULT 0, catchphrase TEXT,
-                target_audience TEXT, play_time TEXT, likes INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                target_audience TEXT, play_time TEXT, likes INTEGER DEFAULT 0, 
+                user_id UUID,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             conn.execute('''CREATE TABLE IF NOT EXISTS reports (
                 id SERIAL PRIMARY KEY, post_id INTEGER REFERENCES posts(id), 
                 reason TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
             conn.execute('''CREATE TABLE IF NOT EXISTS requests (
                 id SERIAL PRIMARY KEY, title TEXT NOT NULL, username TEXT NOT NULL, 
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+            conn.execute('''CREATE TABLE IF NOT EXISTS bookmarks (
+                id SERIAL PRIMARY KEY, user_id UUID NOT NULL, game_id INTEGER REFERENCES games(id) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(user_id, game_id))''')
+                
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS platform TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS image_url TEXT")
             conn.execute("ALTER TABLE games ADD COLUMN IF NOT EXISTS developer_x_id TEXT DEFAULT ''")
@@ -152,6 +219,7 @@ def init_db():
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS oshi_points TEXT DEFAULT ''")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS wanna_play INTEGER DEFAULT 0")
             conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS agree INTEGER DEFAULT 0")
+            conn.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS user_id UUID")
             conn.commit()
     except Exception:
         logger.exception("init_db failed")
@@ -159,6 +227,7 @@ def init_db():
     try:
         with get_db_connection() as conn:
             conn.execute("CREATE INDEX IF NOT EXISTS posts_game_id_idx ON posts (game_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS posts_user_id_idx ON posts (user_id)")
             conn.commit()
     except Exception:
         pass
@@ -172,28 +241,50 @@ def init_db():
 
 init_db()
 
-ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
-
-def fetch_image_bytes(url: str, limit: int = 5_000_000):
+def is_safe_url(url: str) -> bool:
     try:
         p = urlparse(url)
         if p.scheme not in ("http", "https"):
-            return None, None
-            
-        if p.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "169.254.169.254", "metadata.google.internal"):
-            return None, None
-        if p.hostname and (p.hostname.startswith("192.168.") or p.hostname.startswith("10.")):
-            return None, None
-            
+            return False
+        hostname = p.hostname
+        if not hostname:
+            return False
+        addr_info = socket.getaddrinfo(hostname, 80)
+        for res in addr_info:
+            ip_str = res[4][0]
+            ip = ipaddress.ip_address(ip_str)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return False
+        return True
+    except Exception:
+        return False
+
+class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+def fetch_image_bytes(url: str, limit: int = 5_000_000):
+    if not is_safe_url(url):
+        logger.warning(f"SSRF Check failed for URL: {url}")
+        return None, None
+        
+    try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            ct = r.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip().lower()
+        opener = urllib.request.build_opener(NoRedirectHandler())
+        
+        with opener.open(req, timeout=8) as r:
+            ct = r.headers.get('Content-Type', '').split(';')[0].strip().lower()
+            if ct not in ALLOWED_IMAGE_TYPES:
+                logger.warning(f"Invalid Content-Type {ct} for URL: {url}")
+                return None, None
+                
             data = r.read(limit + 1)
             if len(data) > limit:
+                logger.warning(f"Image too large: {url}")
                 return None, None
             return data, ct
-    except Exception:
-        logger.warning("fetch_image_bytes failed: %s", url)
+    except Exception as e:
+        logger.warning(f"fetch_image_bytes failed: {url}, Error: {e}")
         return None, None
 
 def process_image(base64_data: str):
@@ -318,6 +409,9 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .quick-filter { display: flex; align-items: center; justify-content: center; min-height: 46px; padding: 0.6rem 0.8rem; background: #0f172a; border: 1px solid var(--border); border-radius: 10px; color: var(--text-main); text-decoration: none; font-weight: bold; text-align: center; transition: 0.2s; }
 .quick-filter:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
 .quick-filter.active { background-color: var(--accent); color: #fff; border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 6px rgba(245,158,11,0.2); }
+.footer { text-align: center; padding: 2rem; border-top: 1px solid var(--border); margin-top: 3rem; color: var(--text-sub); font-size: 0.9rem; }
+.footer a { color: var(--text-sub); text-decoration: none; margin: 0 1rem; }
+.footer a:hover { color: var(--text-main); text-decoration: underline; }
 
 @media (max-width: 600px) { 
     html { font-size: 16px; }
@@ -360,7 +454,7 @@ function toggleSpoiler(btn) {
 
 function shareGameToX(title, devId) { 
     const cleanTitleTag = '#' + title.replace(/[\s /／・！!？?♪～描()（）[\]「」『』]/g, '');
-    let mentions = "@horse_123123";
+    let mentions = "";
     if (devId && devId.trim()) {
         let cleanDevId = devId.trim();
         if (!cleanDevId.startsWith('@')) cleanDevId = '@' + cleanDevId;
@@ -394,7 +488,7 @@ function sharePost(btn, platform) {
     } else if (spoilerLevel === 1) text += `\n\n🔒 軽微なネタバレを含みます`;
     else if (spoilerLevel === 2) text += `\n\n⚠️ ネタバレあり`;
     
-    let mentions = "@horse_123123";
+    let mentions = "";
     if (devId.trim()) {
         let cleanDevId = devId.trim();
         if (!cleanDevId.startsWith('@')) cleanDevId = '@' + cleanDevId;
@@ -696,75 +790,6 @@ async function drawPromoCard() {
     simY += titleLines * 55 + 30;
 
     if (contentRaw) {
-        const contentLines = getLines('「' + contentRaw.trim() + '」', 920, '400 30px "Noto Sans JP", sans-serif', 4);
-        simY += contentLines * 45 + 40;
-    }
-
-    if (target) {
-        simY += 35 + 35 + 60;
-    }
-
-    const tags = [];
-    if(playTime) tags.push(playTime);
-    if(genre) tags.push(genre);
-    if(platform) tags.push(...platform.split(',').map(s=>s.trim()).filter(Boolean));
-    if(oshiPoints) tags.push(...oshiPoints.split(',').filter(Boolean));
-    if(tags.length) { simY += 42 + 40; }
-
-    const panelH = simY - panelY + 20;
-    const H = Math.max(1350, panelY + panelH + 100);
-    
-    canvas.width = W; canvas.height = H;
-
-    const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, '#1e293b'); bg.addColorStop(1, '#020617');
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-
-    if (img) {
-        ctx.drawImage(img, 0, 0, W, drawH);
-        const fadeStart = Math.max(0, drawH - 250);
-        const fade = ctx.createLinearGradient(0, fadeStart, 0, drawH);
-        fade.addColorStop(0, 'rgba(2, 6, 23, 0)'); fade.addColorStop(1, '#020617');
-        ctx.fillStyle = fade; ctx.fillRect(0, fadeStart, W, drawH - fadeStart);
-        if (drawH < H) {
-            ctx.fillStyle = '#020617';
-            ctx.fillRect(0, drawH, W, H - drawH);
-        }
-    } else {
-        const glow = ctx.createRadialGradient(W/2, 300, 50, W/2, 300, 600);
-        glow.addColorStop(0, 'rgba(245,158,11,0.2)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
-        ctx.fillStyle = glow; ctx.fillRect(0, 0, W, 900);
-    }
-
-    ctx.fillStyle = '#f59e0b'; ctx.fillRect(0, 40, 12, 50);
-    ctx.font = '900 36px "Noto Sans JP", sans-serif'; ctx.fillText('OSHI-GE', 40, 78);
-
-    let badgeText = '🟢 ネタバレなし'; let badgeColor = '#10b981'; let badgeBg = 'rgba(16, 185, 129, 0.2)';
-    if (spoiler === 1) { badgeText = '🟡 軽微なネタバレあり'; badgeColor = '#f59e0b'; badgeBg = 'rgba(245, 158, 11, 0.2)'; }
-    if (spoiler === 2) { badgeText = '🔴 ネタバレあり'; badgeColor = '#ef4444'; badgeBg = 'rgba(239, 68, 68, 0.2)'; }
-    ctx.font = '900 24px "Noto Sans JP", sans-serif';
-    const bw = ctx.measureText(badgeText).width + 40;
-    drawRoundRect(ctx, W - bw - 40, 40, bw, 50, 25);
-    ctx.fillStyle = badgeBg; ctx.fill();
-    ctx.strokeStyle = badgeColor; ctx.lineWidth = 2; ctx.stroke();
-    ctx.fillStyle = badgeColor; ctx.fillText(badgeText, W - bw - 20, 73);
-
-    ctx.fillStyle = '#ffffff';
-    ctx.shadowColor = 'rgba(0,0,0,0.9)'; ctx.shadowBlur = 15;
-    ctx.font = '900 65px "Noto Sans JP", sans-serif';
-    wrapCanvasText(ctx, catchphrase, 50, catchY, 980, 85, 3);
-    ctx.shadowBlur = 0;
-
-    drawRoundRect(ctx, 40, panelY, 1000, panelH, 20);
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
-    ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
-
-    let currentY = panelY + 70;
-    ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
-    const drawnTitleLines = wrapCanvasText(ctx, title, 80, currentY, 920, 55, 2);
-    currentY += drawnTitleLines * 55 + 30;
-
-    if (contentRaw) {
         ctx.fillStyle = '#cbd5e1'; ctx.font = '400 30px "Noto Sans JP", sans-serif';
         const drawnContentLines = wrapCanvasText(ctx, '「' + contentRaw.trim() + '」', 80, currentY, 920, 45, 4);
         currentY += drawnContentLines * 45 + 40;
@@ -837,7 +862,7 @@ function sharePromoCardToX() {
     } else if (spoilerLevel === 1) text += `\n\n🔒 軽微なネタバレを含みます`;
     else if (spoilerLevel === 2) text += `\n\n⚠️ ネタバレあり`;
     
-    let mentions = "@horse_123123";
+    let mentions = "";
     if (devId.trim()) {
         let cleanDevId = devId.trim();
         if (!cleanDevId.startsWith('@')) cleanDevId = '@' + cleanDevId;
@@ -1005,6 +1030,14 @@ BASE_HTML = """
             </div>
         </div>
     </div>
+    
+    <footer class="footer">
+        <div>
+            <a href="/">トップページ</a> | 
+            <a href="/privacy">プライバシーポリシー・免責事項</a>
+        </div>
+        <div style="margin-top: 1rem;">&copy; 2026 Oshi-Ge</div>
+    </footer>
 
     <script>{{ js }}</script>
 </body>
@@ -1207,7 +1240,7 @@ GAME_HTML = """
             <span class="post-author">👤 {{ post.username }}</span>
             <div style="display: flex; align-items: center; gap: 1rem;">
                 <span>{{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}</span>
-                {% if post.id in my_posts %}<a href="/games/{{ game.id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">⚙ 編集</a>{% endif %}
+                {% if post.id in my_posts or (user_id and post.user_id == user_id) %}<a href="/games/{{ game.id }}/posts/{{ post.id }}/edit" class="btn btn-outline btn-small" style="padding: 0.2rem 0.5rem; font-size: 0.8rem;">⚙ 編集</a>{% endif %}
             </div>
         </div>
         {% if post.catchphrase %}
@@ -1269,6 +1302,26 @@ MYPAGE_HTML = """
 <div class="card">
     <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">👤 マイページ</h2>
     
+    {% if not user_id %}
+    <div style="background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; padding: 1.5rem; border-radius: 8px; margin-bottom: 2rem;">
+        <h3 style="color: #3b82f6; margin-top: 0;">🔄 データをアカウントに紐付ける（任意）</h3>
+        <p style="font-size: 0.9rem; color: var(--text-sub); margin-bottom: 1rem;">
+            ログインすると、現在の端末の「布教履歴（編集権限）」と「お気に入り」がアカウントに保存され、<br>
+            ブラウザを変えたりスマホを買い替えてもデータを引き継げるようになります。<br>
+            ※投稿時の名前は今まで通り「布教ネーム」が使われ、SNSアカウントが公開されることはありません。
+        </p>
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+            <form action="/auth/login/google" method="post"><button type="submit" class="btn btn-outline" style="background: #fff; color: #444;">Googleでログイン</button></form>
+            <form action="/auth/login/twitter" method="post"><button type="submit" class="btn btn-outline" style="background: #000; color: #fff; border-color: #333;">X (Twitter) でログイン</button></form>
+        </div>
+    </div>
+    {% else %}
+    <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(16, 185, 129, 0.1); border: 1px solid var(--safe); padding: 1rem; border-radius: 8px; margin-bottom: 2rem;">
+        <div><span style="color: var(--safe); font-weight: bold;">✅ アカウント連携済み</span><br><span style="font-size: 0.85rem; color: var(--text-sub);">他の端末でもログインすれば履歴が同期されます。</span></div>
+        <form action="/auth/logout" method="post"><button type="submit" class="btn btn-outline btn-small">ログアウト</button></form>
+    </div>
+    {% endif %}
+
     <div id="like-notification" style="display: none; background: rgba(16, 185, 129, 0.1); border: 1px solid var(--safe); color: var(--safe); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; justify-content: space-between; align-items: center;">
         <div style="font-weight: bold;">🎉 あなたの布教に新しいリアクションがつきました！</div>
         <button onclick="document.getElementById('like-notification').style.display='none'" style="background: transparent; border: none; color: var(--safe); font-size: 1.2rem; cursor: pointer;">✕</button>
@@ -1516,8 +1569,77 @@ EDIT_POST_HTML = """
 </div>
 """
 
+PRIVACY_HTML = """
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">プライバシーポリシー・免責事項</h2>
+    
+    <h3 style="color: var(--accent);">当サイトに掲載されている広告について</h3>
+    <p>当サイトでは、第三者配信の広告サービス（Googleアドセンス、Amazonアソシエイト、楽天アフィリエイト）を利用しています。<br>
+    このような広告配信事業者は、ユーザーの興味に応じた商品やサービスの広告を表示するため、当サイトや他サイトへのアクセスに関する情報 「Cookie」(氏名、住所、メール アドレス、電話番号は含まれません) を使用することがあります。<br>
+    Googleアドセンスに関して、このプロセスの詳細やこのような情報が広告配信事業者に使用されないようにする方法については、<a href="https://policies.google.com/technologies/ads" target="_blank" style="color: #3b82f6;">こちら</a>をご覧ください。</p>
+    
+    <h3 style="color: var(--accent);">アクセス解析ツールについて</h3>
+    <p>当サイトでは、Googleによるアクセス解析ツール「Googleアナリティクス」を利用しています。<br>
+    このGoogleアナリティクスはトラフィックデータの収集のためにCookieを使用しています。このトラフィックデータは匿名で収集されており、個人を特定するものではありません。<br>
+    この機能はCookieを無効にすることで収集を拒否することが出来ますので、お使いのブラウザの設定をご確認ください。</p>
+    
+    <h3 style="color: var(--accent);">免責事項</h3>
+    <p>当サイトからリンクやバナーなどによって他のサイトに移動された場合、移動先サイトで提供される情報、サービス等について一切の責任を負いません。<br>
+    当サイトのコンテンツ・情報につきまして、可能な限り正確な情報を掲載するよう努めておりますが、誤情報が入り込んだり、情報が古くなっていることもございます。<br>
+    当サイトに掲載された内容によって生じた損害等の一切の責任を負いかねますのでご了承ください。</p>
+    
+    <h3 style="color: var(--accent);">ユーザー投稿データの取り扱い</h3>
+    <p>当サイトはユーザーが自由にゲームの布教（感想・レビュー等）を投稿できるサービスです。投稿された文章に関する責任は投稿者に帰属します。スパム、誹謗中傷、極端なネタバレなど、管理者が不適切と判断したコンテンツは予告なく削除・非表示にする場合があります。<br>
+    また、ログイン機能（Google連携やX連携等）を利用した場合、当サイトは認証に必要な最小限の識別子（UUID等）のみを保持し、ユーザーのSNSアカウント自体に勝手に投稿したり、パスワードを収集することはありません。</p>
+</div>
+"""
+
+ADMIN_HTML = """
+<div class="card" style="max-width: 1000px; margin: 0 auto; border-color: var(--danger);">
+    <h2 style="border-bottom: 2px solid var(--danger); padding-bottom: 0.5rem; margin-bottom: 1.5rem; color: var(--danger);">🛡 管理ダッシュボード</h2>
+    
+    <h3 style="color: var(--accent);">🚨 通報された投稿一覧</h3>
+    <div style="overflow-x: auto;">
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem;">
+            <thead>
+                <tr style="background: #1e293b; border-bottom: 2px solid var(--border);">
+                    <th style="padding: 0.75rem;">ID</th>
+                    <th style="padding: 0.75rem;">ゲーム</th>
+                    <th style="padding: 0.75rem;">投稿者</th>
+                    <th style="padding: 0.75rem;">通報理由</th>
+                    <th style="padding: 0.75rem;">通報日時</th>
+                    <th style="padding: 0.75rem;">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in reports %}
+                <tr style="border-bottom: 1px solid var(--border);">
+                    <td style="padding: 0.75rem;">{{ r.post_id }}</td>
+                    <td style="padding: 0.75rem;"><a href="/games/{{ r.game_id }}" target="_blank" style="color: #3b82f6;">{{ r.game_title }}</a></td>
+                    <td style="padding: 0.75rem;">{{ r.username }}</td>
+                    <td style="padding: 0.75rem; color: var(--danger); font-weight: bold;">{{ r.reason }}</td>
+                    <td style="padding: 0.75rem;">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td style="padding: 0.75rem;">
+                        <form action="/admin/delete_post" method="post" onsubmit="return confirm('本当にこの投稿を削除しますか？（復元できません）');">
+                            <input type="hidden" name="post_id" value="{{ r.post_id }}">
+                            <button type="submit" class="btn btn-x btn-small" style="background: var(--danger); border-color: darkred;">🗑 削除</button>
+                        </form>
+                    </td>
+                </tr>
+                <tr>
+                    <td colspan="6" style="padding: 0.5rem 1rem 1.5rem; background: #0b1120; color: #cbd5e1; white-space: pre-wrap; font-size: 0.85rem;">{{ r.content }}</td>
+                </tr>
+                {% else %}
+                <tr><td colspan="6" style="padding: 1rem; text-align: center; color: var(--text-sub);">現在、通報されている投稿はありません。</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+"""
+
 def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
-    content_html = get_template(content_template_str).render(**kwargs)
+    content_html = get_template(content_template_str).render(user_id=get_user_id(request), **kwargs)
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
     final_desc = og_description if og_description else "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。"
 
@@ -1531,8 +1653,130 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
     return HTMLResponse(html)
 
 # ---------------------------------------------------------------------------
-# ルーティング
+# Auth / Login Routing
 # ---------------------------------------------------------------------------
+@app.post("/auth/login/{provider}")
+def login(request: Request, provider: str):
+    if provider not in ["google", "twitter"]:
+        raise HTTPException(status_code=400, detail="Invalid provider")
+    if not supabase:
+        return alert_back('Supabaseの設定が存在しないためログインできません。')
+        
+    redirect_url = f"{get_base_url(request)}/auth/callback"
+    try:
+        # Supabase経由でOAuthプロバイダの認証URLを取得
+        res = supabase.auth.sign_in_with_oauth({
+            "provider": provider,
+            "options": {"redirect_to": redirect_url}
+        })
+        return RedirectResponse(url=res.url, status_code=303)
+    except Exception as e:
+        logger.error(f"Login failed: {e}")
+        return alert_back('ログイン処理の開始に失敗しました。')
+
+@app.get("/auth/callback")
+def auth_callback(request: Request):
+    """
+    SupabaseのOAuthコールバックはフラグメント（#）でトークンを返すため、
+    サーバー側では直接受け取れない。通常はクライアント側JSで処理するが、
+    ここでは簡易的に処理をSupabaseの内部リダイレクト（PKCE）に任せるか、
+    トークンをCookieに焼く専用のJSを返す。
+    ※本コードでは、Supabase-pyが標準でサーバー側コールバックを処理できる場合の挙動。
+    （実際は、フロントエンドで supabase.auth.getSession() を叩いてCookieに送るのが定石ですが、
+    今回はバックエンド完結のため、簡易的なセッション取得を想定しています）
+    """
+    code = request.query_params.get("code")
+    if not code or not supabase:
+        return RedirectResponse(url="/mypage", status_code=303)
+        
+    try:
+        session = supabase.auth.exchange_code_for_session({"auth_code": code})
+        res = RedirectResponse(url="/auth/merge", status_code=303)
+        set_auth_cookies(res, session)
+        return res
+    except Exception as e:
+        logger.error(f"Auth callback failed: {e}")
+        return RedirectResponse(url="/mypage", status_code=303)
+
+@app.get("/auth/merge")
+def auth_merge(request: Request):
+    """ログイン直後にCookieのデータをDB（アカウント）へマージする"""
+    user_id = get_user_id(request)
+    if not user_id:
+        return RedirectResponse(url="/mypage", status_code=303)
+
+    my_posts = parse_id_cookie(request, "my_posts")
+    bookmarks = parse_id_cookie(request, "bookmarks")
+    
+    with get_db_connection() as conn:
+        # 投稿の所有権を更新
+        if my_posts:
+            conn.execute("UPDATE posts SET user_id = %s WHERE id = ANY(%s) AND user_id IS NULL", (user_id, my_posts))
+        
+        # お気に入りの移行
+        for gid in bookmarks:
+            try:
+                conn.execute("INSERT INTO bookmarks (user_id, game_id) VALUES (%s, %s)", (user_id, gid))
+            except pgerrors.UniqueViolation:
+                pass
+        conn.commit()
+    
+    res = RedirectResponse(url="/mypage", status_code=303)
+    # マージ完了後はCookie側の履歴を消去（DB優先にするため）
+    res.delete_cookie("my_posts")
+    res.delete_cookie("bookmarks")
+    return res
+
+@app.post("/auth/logout")
+def logout(request: Request):
+    res = RedirectResponse(url="/mypage", status_code=303)
+    clear_auth_cookies(res)
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Admin Routing
+# ---------------------------------------------------------------------------
+def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+@app.get("/admin")
+def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
+    with get_db_connection() as conn:
+        # 通報が多い順に投稿を取得
+        reports = conn.execute('''
+            SELECT p.id as post_id, p.content, p.username, g.id as game_id, g.title as game_title, r.reason, r.created_at
+            FROM reports r
+            JOIN posts p ON r.post_id = p.id
+            JOIN games g ON p.game_id = g.id
+            ORDER BY r.created_at DESC LIMIT 50
+        ''').fetchall()
+        
+    return render_page(request, ADMIN_HTML, page_title="管理ダッシュボード - Oshi-Ge", reports=reports)
+
+@app.post("/admin/delete_post")
+def admin_delete_post(request: Request, post_id: int = Form(...), admin: str = Depends(verify_admin)):
+    with get_db_connection() as conn:
+        # 外部キー制約があるため、関連するreportsを先に消すか、CASCADE設定が必要
+        conn.execute('DELETE FROM reports WHERE post_id = %s', (post_id,))
+        conn.execute('DELETE FROM posts WHERE id = %s', (post_id,))
+        conn.commit()
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Main Routing
+# ---------------------------------------------------------------------------
+
+@app.get("/privacy")
+def read_privacy(request: Request):
+    return render_page(request, PRIVACY_HTML, page_title="プライバシーポリシー・免責事項 - Oshi-Ge")
 
 @app.get("/proxy-image")
 def proxy_image(url: str):
@@ -1673,8 +1917,6 @@ def create_game(
 ):
     if not check_rate_limit(request):
         return HTMLResponse(RATE_LIMIT_HTML)
-    if image_base64 and len(image_base64) > 6600000:
-        return alert_back('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。')
 
     title = clip(title, 200)
     description = clip(description, 2000)
@@ -1695,6 +1937,8 @@ def create_game(
     def dup_response():
         return render_page(request, NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, developer_x_id=developer_x_id, page_title="ゲームを追加する - Oshi-Ge")
 
+    user_id = get_user_id(request)
+
     with get_db_connection() as conn:
         if conn.execute('SELECT id FROM games WHERE LOWER(title) = LOWER(%s)', (title,)).fetchone():
             return dup_response()
@@ -1708,16 +1952,17 @@ def create_game(
             return dup_response()
         game_id = cursor_game.fetchone()["id"]
 
-        cursor_post = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str))
+        cursor_post = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points, user_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str, user_id))
         post_id = cursor_post.fetchone()["id"]
         conn.commit()
 
     mark_posted(request)
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
     
-    my_posts = parse_id_cookie(request, "my_posts")
-    my_posts.append(post_id)
-    set_cookie_safe(res, "my_posts", my_posts)
+    if not user_id:
+        my_posts = parse_id_cookie(request, "my_posts")
+        my_posts.append(post_id)
+        set_cookie_safe(res, "my_posts", my_posts)
     return res
 
 @app.get("/games/{game_id}/edit")
@@ -1730,8 +1975,6 @@ def edit_game_form(request: Request, game_id: int):
 
 @app.post("/games/{game_id}/edit")
 def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form("")):
-    if image_base64 and len(image_base64) > 6600000:
-        return alert_back('画像サイズが大きすぎます（5MB制限）。別の画像をご利用ください。')
 
     title = clip(title, 200)
     description = clip(description, 2000)
@@ -1769,8 +2012,17 @@ def read_game(request: Request, game_id: int, sort: str = "likes"):
         order_str = 'created_at DESC' if sort == 'new' else '(COALESCE(likes,0) + COALESCE(wanna_play,0) + COALESCE(agree,0)) DESC, created_at DESC'
         posts = conn.execute(f'SELECT * FROM posts WHERE game_id = %s ORDER BY {order_str}', (game_id,)).fetchall()
 
-    my_posts = parse_id_cookie(request, "my_posts")
-    bookmarks = parse_id_cookie(request, "bookmarks")
+    user_id = get_user_id(request)
+    my_posts = []
+    bookmarks = []
+    
+    if user_id:
+        with get_db_connection() as conn:
+            bm_rows = conn.execute('SELECT game_id FROM bookmarks WHERE user_id = %s', (user_id,)).fetchall()
+            bookmarks = [row["game_id"] for row in bm_rows]
+    else:
+        my_posts = parse_id_cookie(request, "my_posts")
+        bookmarks = parse_id_cookie(request, "bookmarks")
 
     game_title_tag = f"{game['title']} の評価・感想・ネタバレなし布教 - Oshi-Ge"
     og_desc = game['description'] if game['description'] else f"『{game['title']}』のおすすめ布教ページです。ネタバレなしで魅力をお伝えします。"
@@ -1793,31 +2045,43 @@ def create_post(request: Request, game_id: int, username: str = Form(...), catch
     if not catchphrase or not content:
         return alert_back('必須項目が入力されていません。')
 
+    user_id = get_user_id(request)
+
     with get_db_connection() as conn:
         if not conn.execute('SELECT id FROM games WHERE id = %s', (game_id,)).fetchone():
             raise HTTPException(status_code=404, detail="Game not found")
-        cursor = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str))
+        cursor = conn.execute('''INSERT INTO posts (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, oshi_points, user_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id''', (game_id, username, catchphrase, target_audience, play_time, content, spoiler_level, points_str, user_id))
         post_id = cursor.fetchone()["id"]
         conn.commit()
 
     mark_posted(request)
     res = RedirectResponse(url=f"/games/{game_id}?posted={post_id}", status_code=303)
     
-    my_posts = parse_id_cookie(request, "my_posts")
-    my_posts.append(post_id)
-    set_cookie_safe(res, "my_posts", my_posts)
+    if not user_id:
+        my_posts = parse_id_cookie(request, "my_posts")
+        my_posts.append(post_id)
+        set_cookie_safe(res, "my_posts", my_posts)
     return res
 
-NO_EDIT_PERMISSION = "<script>alert('投稿の編集権限が確認できませんでした（Cookieが無効化されている可能性があります）。');location.href='/games/{gid}';</script>"
+NO_EDIT_PERMISSION = "<script>alert('投稿の編集権限が確認できませんでした（Cookieが無効化されている、または別のアカウントで投稿された可能性があります）。');location.href='/games/{gid}';</script>"
 
 @app.get("/games/{game_id}/posts/{post_id}/edit")
 def edit_post_form(request: Request, game_id: int, post_id: int):
-    if post_id not in parse_id_cookie(request, "my_posts"):
-        return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
+    user_id = get_user_id(request)
     with get_db_connection() as conn:
         post = conn.execute('SELECT * FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
+        
     if not post:
         raise HTTPException(status_code=404)
+        
+    # 権限チェック：ログインユーザーのIDと一致するか、または未ログインでCookieにIDが存在するか
+    if user_id:
+        if post["user_id"] != user_id:
+            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
+    else:
+        if post_id not in parse_id_cookie(request, "my_posts"):
+            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
+
     return render_page(request, EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/posts/{post_id}/edit")
@@ -1833,8 +2097,19 @@ def update_post(
     spoiler_level: int = Form(...),
     oshi_points: List[str] = Form(default=[])
 ):
-    if post_id not in parse_id_cookie(request, "my_posts"):
-        return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
+    user_id = get_user_id(request)
+    with get_db_connection() as conn:
+        post = conn.execute('SELECT user_id FROM posts WHERE id = %s AND game_id = %s', (post_id, game_id)).fetchone()
+        
+    if not post:
+        raise HTTPException(status_code=404)
+        
+    if user_id:
+        if post["user_id"] != user_id:
+            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
+    else:
+        if post_id not in parse_id_cookie(request, "my_posts"):
+            return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
 
     username = clip(username, 50) or "名無しの布教者"
     catchphrase = clip(catchphrase, 100)
@@ -1880,20 +2155,35 @@ def react_post(game_id: int, post_id: int, react_type: str):
 
 @app.post("/games/{game_id}/bookmark")
 def toggle_bookmark(request: Request, game_id: int):
-    bookmarks = parse_id_cookie(request, "bookmarks")
+    user_id = get_user_id(request)
     is_bookmarked = False
-    if game_id in bookmarks:
-        bookmarks.remove(game_id)
-    else:
-        with get_db_connection() as conn:
-            if not conn.execute('SELECT id FROM games WHERE id = %s', (game_id,)).fetchone():
-                raise HTTPException(status_code=404)
-        bookmarks.append(game_id)
-        is_bookmarked = True
-    bookmarks = bookmarks[-200:]
-    res = JSONResponse(content={"bookmarked": is_bookmarked})
-    set_cookie_safe(res, "bookmarks", bookmarks)
-    return res
+    
+    with get_db_connection() as conn:
+        if not conn.execute('SELECT id FROM games WHERE id = %s', (game_id,)).fetchone():
+            raise HTTPException(status_code=404)
+            
+        if user_id:
+            # ログインユーザーの場合
+            existing = conn.execute('SELECT id FROM bookmarks WHERE user_id = %s AND game_id = %s', (user_id, game_id)).fetchone()
+            if existing:
+                conn.execute('DELETE FROM bookmarks WHERE id = %s', (existing["id"],))
+            else:
+                conn.execute('INSERT INTO bookmarks (user_id, game_id) VALUES (%s, %s)', (user_id, game_id))
+                is_bookmarked = True
+            conn.commit()
+            return JSONResponse(content={"bookmarked": is_bookmarked})
+        else:
+            # 未ログイン（Cookie管理）の場合
+            bookmarks = parse_id_cookie(request, "bookmarks")
+            if game_id in bookmarks:
+                bookmarks.remove(game_id)
+            else:
+                bookmarks.append(game_id)
+                is_bookmarked = True
+            bookmarks = bookmarks[-200:]
+            res = JSONResponse(content={"bookmarked": is_bookmarked})
+            set_cookie_safe(res, "bookmarks", bookmarks)
+            return res
 
 @app.post("/requests")
 def create_request(request: Request, title: str = Form(...), username: str = Form("名無しのゲーマー")):
@@ -1911,17 +2201,21 @@ def create_request(request: Request, title: str = Form(...), username: str = For
 
 @app.get("/mypage")
 def mypage(request: Request):
-    my_posts_ids = parse_id_cookie(request, "my_posts")
-    bookmarks = parse_id_cookie(request, "bookmarks")
-
+    user_id = get_user_id(request)
     my_posts_list = []
     bookmarked_games = []
-
+    
     with get_db_connection() as conn:
-        if my_posts_ids:
-            my_posts_list = conn.execute("SELECT p.*, g.title as game_title, g.image_url as game_image_url, g.genre as game_genre, g.platform as game_platform, g.developer_x_id as game_developer_x_id FROM posts p JOIN games g ON p.game_id = g.id WHERE p.id = ANY(%s) ORDER BY p.created_at DESC", (my_posts_ids,)).fetchall()
-        if bookmarks:
-            bookmarked_games = conn.execute("SELECT * FROM games WHERE id = ANY(%s) ORDER BY created_at DESC", (bookmarks,)).fetchall()
+        if user_id:
+            my_posts_list = conn.execute("SELECT p.*, g.title as game_title, g.image_url as game_image_url, g.genre as game_genre, g.platform as game_platform, g.developer_x_id as game_developer_x_id FROM posts p JOIN games g ON p.game_id = g.id WHERE p.user_id = %s ORDER BY p.created_at DESC", (user_id,)).fetchall()
+            bookmarked_games = conn.execute("SELECT g.* FROM games g JOIN bookmarks b ON g.id = b.game_id WHERE b.user_id = %s ORDER BY b.created_at DESC", (user_id,)).fetchall()
+        else:
+            my_posts_ids = parse_id_cookie(request, "my_posts")
+            bookmarks = parse_id_cookie(request, "bookmarks")
+            if my_posts_ids:
+                my_posts_list = conn.execute("SELECT p.*, g.title as game_title, g.image_url as game_image_url, g.genre as game_genre, g.platform as game_platform, g.developer_x_id as game_developer_x_id FROM posts p JOIN games g ON p.game_id = g.id WHERE p.id = ANY(%s) ORDER BY p.created_at DESC", (my_posts_ids,)).fetchall()
+            if bookmarks:
+                bookmarked_games = conn.execute("SELECT * FROM games WHERE id = ANY(%s) ORDER BY created_at DESC", (bookmarks,)).fetchall()
 
     total_likes = sum((p.get("likes") or 0) + (p.get("wanna_play") or 0) + (p.get("agree") or 0) for p in my_posts_list)
 
