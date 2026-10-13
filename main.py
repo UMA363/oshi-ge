@@ -23,7 +23,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from jinja2 import Environment
 from markupsafe import Markup
 from itsdangerous import URLSafeSerializer
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 import psycopg
 from psycopg import errors as pgerrors
@@ -983,13 +983,12 @@ BASE_HTML = """
     <meta property="og:type" content="website">
     <meta property="og:title" content="{{ page_title }}">
     <meta property="og:description" content="{{ og_description }}">
-    {% if og_image %}
-    <meta property="og:image" content="{{ og_image }}">
+    <meta property="og:image" content="{{ og_image if og_image else base_url + '/ogp.png' }}">
     <meta name="twitter:card" content="summary_large_image">
-    {% else %}
-    <meta property="og:image" content="{{ base_url }}/ogp.png">
-    <meta name="twitter:card" content="summary_large_image">
-    {% endif %}
+    <meta name="twitter:title" content="{{ page_title }}">
+    <meta name="twitter:description" content="{{ og_description }}">
+    <meta name="twitter:image" content="{{ og_image if og_image else base_url + '/ogp.png' }}">
+    
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
     
     {% if canonical_url %}
@@ -1750,6 +1749,69 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
     return HTMLResponse(html)
 
 # ---------------------------------------------------------------------------
+# OGP Dynamic Image Routes
+# ---------------------------------------------------------------------------
+@app.get("/ogp.png")
+def generate_top_ogp(request: Request):
+    """トップページ用の動的OGP画像生成"""
+    W, H = 1200, 630
+    img = Image.new("RGB", (W, H), color="#0f172a")
+    draw = ImageDraw.Draw(img)
+    
+    # 背景のグラデーション風装飾やアクセント
+    draw.rectangle([0, 0, W, 16], fill="#f59e0b")
+    
+    # テキスト描画 (デフォルトフォント使用)
+    try:
+        font_large = ImageFont.truetype(FONT_PATH, 55)
+        font_sub = ImageFont.truetype(FONT_PATH, 30)
+    except Exception:
+        font_large = ImageFont.load_default()
+        font_sub = ImageFont.load_default()
+
+    draw.text((80, 150), "🎮 Oshi-Ge（推しゲー）", fill="#f59e0b", font=font_large)
+    draw.text((80, 250), "誰かの人生を変える1本を。", fill="#f8fafc", font=font_large)
+    draw.text((80, 350), "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。", fill="#94a3b8", font=font_sub)
+    
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+@app.get("/games/{game_id}/ogp.png")
+def generate_game_ogp(request: Request, game_id: int):
+    """ゲーム詳細ページ用の動的OGP画像生成"""
+    with get_db_connection() as conn:
+        game = conn.execute("SELECT title, genre FROM games WHERE id = %s", (game_id,)).fetchone()
+    
+    title = game["title"] if game else "神ゲー布教"
+    genre = game["genre"] if game else "ゲーム"
+
+    W, H = 1200, 630
+    img = Image.new("RGB", (W, H), color="#0f172a")
+    draw = ImageDraw.Draw(img)
+    
+    draw.rectangle([0, 0, W, 16], fill="#f59e0b")
+    
+    try:
+        font_title = ImageFont.truetype(FONT_PATH, 50)
+        font_badge = ImageFont.truetype(FONT_PATH, 28)
+        font_sub = ImageFont.truetype(FONT_PATH, 26)
+    except Exception:
+        font_title = ImageFont.load_default()
+        font_badge = ImageFont.load_default()
+        font_sub = ImageFont.load_default()
+
+    draw.text((80, 100), f"🎮 {genre}", fill="#f59e0b", font=font_badge)
+    draw.text((80, 180), f"『{title}』", fill="#f8fafc", font=font_title)
+    draw.text((80, 320), "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教", fill="#94a3b8", font=font_sub)
+    draw.text((80, 520), "Oshi-Ge 社区", fill="#64748b", font=font_sub)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return Response(content=buf.getvalue(), media_type="image/png")
+
+
+# ---------------------------------------------------------------------------
 # Auth / Login Routing (Stateless PKCE)
 # ---------------------------------------------------------------------------
 def _pkce_pair():
@@ -1901,8 +1963,6 @@ def api_games_list():
 @app.get("/")
 def read_root(request: Request, q: str = "", genre: str = "", platform: str = "", sort: str = "new"):
     q = clip(q, 100)
-    
-    # 🕒 最新順のときは「ゲームに紐づく最新の布教投稿日時（なければゲーム登録日時）」を基準にソート
     order_clause = "COALESCE((SELECT MAX(created_at) FROM posts p WHERE p.game_id = g.id), g.created_at) DESC"
     if sort == "posts":
         order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
