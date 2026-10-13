@@ -1215,6 +1215,7 @@ BASE_HTML = """
         <div>
             <a href="/">トップページ</a> | 
             <a href="/privacy">プライバシーポリシー・免責事項</a>
+            <a href="https://docs.google.com/forms/d/e/1FAIpQLSd-T-pvp84tbmSImJpUi79bhk1AW6CgEIeZVeh4vVgmDsZFlw/viewform?usp=publish-editor" target="_blank" rel="noopener">ご意見・バグ報告</a>
         </div>
         <div style="margin-top: 1rem;">&copy; 2026 Oshi-Ge</div>
     </footer>
