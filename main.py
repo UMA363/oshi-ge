@@ -873,6 +873,10 @@ BASE_HTML = """
     {% endif %}
     <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text x=%2250%%22 y=%2250%%22 style=%22dominant-baseline:central;text-anchor:middle;font-size:90px;%22>🎮</text></svg>">
     
+    {% if canonical_url %}
+    <link rel="canonical" href="{{ canonical_url }}">
+    {% endif %}
+    
     {% if game_schema %}
     <script type="application/ld+json">
     {
@@ -1517,10 +1521,12 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
     final_desc = og_description if og_description else "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。"
 
+    canonical_url = f"{get_base_url(request)}{request.url.path}"
+
     html = get_template(BASE_HTML).render(
         request=request, css=Markup(CSS), js=Markup(JS), content=Markup(content_html), is_top=is_top,
         page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema,
-        base_url=get_base_url(request), **kwargs
+        base_url=get_base_url(request), canonical_url=canonical_url, **kwargs
     )
     return HTMLResponse(html)
 
@@ -1588,6 +1594,63 @@ def read_root(request: Request, q: str = "", genre: str = "", platform: str = ""
         requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
 
     return render_page(request, INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
+
+# ---------------------------------------------------------------------------
+# SEO対策: ジャンル別 静的URLルーティング (LP用)
+# ---------------------------------------------------------------------------
+
+GENRE_SLUGS = {
+    "rpg": "RPG",
+    "action": "アクション",
+    "adventure": "アドベンチャー",
+    "simulation": "シミュレーション",
+    "fps-tps": "FPS / TPS",
+    "puzzle": "パズル",
+    "novel": "ノベル",
+    "horror": "ホラー",
+    "indie": "インディー",
+    "other": "その他 / 不明"
+}
+
+@app.get("/genres/{genre_slug}")
+def read_genre_page(request: Request, genre_slug: str, sort: str = "new"):
+    genre_slug = genre_slug.lower()
+    if genre_slug not in GENRE_SLUGS:
+        raise HTTPException(status_code=404, detail="Genre not found")
+        
+    genre_name = GENRE_SLUGS[genre_slug]
+    
+    order_clause = "g.created_at DESC"
+    if sort == "posts":
+        order_clause = "(SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) DESC, g.created_at DESC"
+        
+    query = '''SELECT g.*, 
+              (SELECT catchphrase FROM posts p WHERE p.game_id = g.id ORDER BY p.created_at DESC LIMIT 1) as latest_catchphrase, 
+              (SELECT COUNT(*) FROM posts p WHERE p.game_id = g.id) as post_count 
+              FROM games g WHERE g.genre = %s ORDER BY ''' + order_clause
+              
+    with get_db_connection() as conn:
+        games = conn.execute(query, (genre_name,)).fetchall()
+        weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(COALESCE(p.likes,0) + COALESCE(p.wanna_play,0) + COALESCE(p.agree,0)), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
+        requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
+
+    page_title = f"{genre_name}のおすすめ神ゲー布教一覧 - Oshi-Ge"
+    og_desc = f"次に遊ぶゲームを探している方へ。みんなが熱く語る、ネタバレなしの{genre_name}おすすめ布教一覧です。"
+
+    return render_page(
+        request, 
+        INDEX_HTML, 
+        is_top=False, 
+        games=games, 
+        q="", 
+        genre=genre_name, 
+        platform="", 
+        sort=sort, 
+        weekly_ranking=weekly_ranking, 
+        requests=requests,
+        page_title=page_title,
+        og_description=og_desc
+    )
 
 @app.get("/games/random")
 def random_game():
