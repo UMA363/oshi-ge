@@ -41,9 +41,8 @@ security = HTTPBasic()
 DATABASE_URL = os.environ.get("DATABASE_URL")
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123") # 管理画面のパスワード
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
-# Supabase Auth クライアント
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -161,11 +160,7 @@ def set_cookie_safe(res: Response, key: str, values: List[int]):
     signed_val = serializer.dumps(values)
     res.set_cookie(key=key, value=signed_val, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax", secure=True)
 
-# ---------------------------------------------------------------------------
-# Auth Helper Functions
-# ---------------------------------------------------------------------------
 def get_user_id(request: Request) -> Optional[str]:
-    """CookieからSupabaseのセッションを取得し、user_idを返す"""
     access_token = request.cookies.get("sb-access-token")
     if not access_token or not supabase:
         return None
@@ -175,18 +170,10 @@ def get_user_id(request: Request) -> Optional[str]:
     except Exception:
         return None
 
-def set_auth_cookies(res: Response, session):
-    """SupabaseのセッションをCookieに保存"""
-    res.set_cookie("sb-access-token", session.access_token, max_age=session.expires_in, httponly=True, samesite="lax", secure=True)
-    res.set_cookie("sb-refresh-token", session.refresh_token, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax", secure=True)
-
 def clear_auth_cookies(res: Response):
     res.delete_cookie("sb-access-token")
     res.delete_cookie("sb-refresh-token")
 
-# ---------------------------------------------------------------------------
-# DB Init
-# ---------------------------------------------------------------------------
 def init_db():
     try:
         with get_db_connection() as conn:
@@ -876,6 +863,26 @@ function sharePromoCardToX() {
 }
 
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePromoCard(); });
+
+// SupabaseのOAuthコールバック（URLフラグメント）をキャッチしてCookieに保存する処理を追加
+window.addEventListener("DOMContentLoaded", () => {
+    const hash = window.location.hash;
+    if (hash && hash.includes("access_token=")) {
+        const params = new URLSearchParams(hash.substring(1));
+        const accessToken = params.get("access_token");
+        const refreshToken = params.get("refresh_token");
+        const expiresIn = params.get("expires_in") || 3600;
+
+        if (accessToken) {
+            document.cookie = `sb-access-token=${accessToken}; path=/; max-age=${expiresIn}; SameSite=Lax; Secure`;
+            if (refreshToken) {
+                document.cookie = `sb-refresh-token=${refreshToken}; path=/; max-age=2592000; SameSite=Lax; Secure`;
+            }
+            window.location.hash = ""; // 画面のチラつき防止
+            window.location.href = "/auth/merge"; // マージ処理へリダイレクト
+        }
+    }
+});
 """
 
 BASE_HTML = """
@@ -1662,9 +1669,9 @@ def login(request: Request, provider: str):
     if not supabase:
         return alert_back('Supabaseの設定が存在しないためログインできません。')
         
-    redirect_url = f"{get_base_url(request)}/auth/callback"
+    # コールバック先を直接マイページに向ける
+    redirect_url = f"{get_base_url(request)}/mypage"
     try:
-        # Supabase経由でOAuthプロバイダの認証URLを取得
         res = supabase.auth.sign_in_with_oauth({
             "provider": provider,
             "options": {"redirect_to": redirect_url}
@@ -1674,33 +1681,8 @@ def login(request: Request, provider: str):
         logger.error(f"Login failed: {e}")
         return alert_back('ログイン処理の開始に失敗しました。')
 
-@app.get("/auth/callback")
-def auth_callback(request: Request):
-    """
-    SupabaseのOAuthコールバックはフラグメント（#）でトークンを返すため、
-    サーバー側では直接受け取れない。通常はクライアント側JSで処理するが、
-    ここでは簡易的に処理をSupabaseの内部リダイレクト（PKCE）に任せるか、
-    トークンをCookieに焼く専用のJSを返す。
-    ※本コードでは、Supabase-pyが標準でサーバー側コールバックを処理できる場合の挙動。
-    （実際は、フロントエンドで supabase.auth.getSession() を叩いてCookieに送るのが定石ですが、
-    今回はバックエンド完結のため、簡易的なセッション取得を想定しています）
-    """
-    code = request.query_params.get("code")
-    if not code or not supabase:
-        return RedirectResponse(url="/mypage", status_code=303)
-        
-    try:
-        session = supabase.auth.exchange_code_for_session({"auth_code": code})
-        res = RedirectResponse(url="/auth/merge", status_code=303)
-        set_auth_cookies(res, session)
-        return res
-    except Exception as e:
-        logger.error(f"Auth callback failed: {e}")
-        return RedirectResponse(url="/mypage", status_code=303)
-
 @app.get("/auth/merge")
 def auth_merge(request: Request):
-    """ログイン直後にCookieのデータをDB（アカウント）へマージする"""
     user_id = get_user_id(request)
     if not user_id:
         return RedirectResponse(url="/mypage", status_code=303)
@@ -1709,11 +1691,9 @@ def auth_merge(request: Request):
     bookmarks = parse_id_cookie(request, "bookmarks")
     
     with get_db_connection() as conn:
-        # 投稿の所有権を更新
         if my_posts:
             conn.execute("UPDATE posts SET user_id = %s WHERE id = ANY(%s) AND user_id IS NULL", (user_id, my_posts))
         
-        # お気に入りの移行
         for gid in bookmarks:
             try:
                 conn.execute("INSERT INTO bookmarks (user_id, game_id) VALUES (%s, %s)", (user_id, gid))
@@ -1722,7 +1702,6 @@ def auth_merge(request: Request):
         conn.commit()
     
     res = RedirectResponse(url="/mypage", status_code=303)
-    # マージ完了後はCookie側の履歴を消去（DB優先にするため）
     res.delete_cookie("my_posts")
     res.delete_cookie("bookmarks")
     return res
@@ -1749,7 +1728,6 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/admin")
 def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
     with get_db_connection() as conn:
-        # 通報が多い順に投稿を取得
         reports = conn.execute('''
             SELECT p.id as post_id, p.content, p.username, g.id as game_id, g.title as game_title, r.reason, r.created_at
             FROM reports r
@@ -1763,7 +1741,6 @@ def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
 @app.post("/admin/delete_post")
 def admin_delete_post(request: Request, post_id: int = Form(...), admin: str = Depends(verify_admin)):
     with get_db_connection() as conn:
-        # 外部キー制約があるため、関連するreportsを先に消すか、CASCADE設定が必要
         conn.execute('DELETE FROM reports WHERE post_id = %s', (post_id,))
         conn.execute('DELETE FROM posts WHERE id = %s', (post_id,))
         conn.commit()
@@ -2074,7 +2051,6 @@ def edit_post_form(request: Request, game_id: int, post_id: int):
     if not post:
         raise HTTPException(status_code=404)
         
-    # 権限チェック：ログインユーザーのIDと一致するか、または未ログインでCookieにIDが存在するか
     if user_id:
         if post["user_id"] != user_id:
             return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
@@ -2163,7 +2139,6 @@ def toggle_bookmark(request: Request, game_id: int):
             raise HTTPException(status_code=404)
             
         if user_id:
-            # ログインユーザーの場合
             existing = conn.execute('SELECT id FROM bookmarks WHERE user_id = %s AND game_id = %s', (user_id, game_id)).fetchone()
             if existing:
                 conn.execute('DELETE FROM bookmarks WHERE id = %s', (existing["id"],))
@@ -2173,7 +2148,6 @@ def toggle_bookmark(request: Request, game_id: int):
             conn.commit()
             return JSONResponse(content={"bookmarked": is_bookmarked})
         else:
-            # 未ログイン（Cookie管理）の場合
             bookmarks = parse_id_cookie(request, "bookmarks")
             if game_id in bookmarks:
                 bookmarks.remove(game_id)
