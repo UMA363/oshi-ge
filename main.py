@@ -57,7 +57,6 @@ serializer = URLSafeSerializer(SECRET_KEY)
 pool = None
 if DATABASE_URL:
     try:
-        # prepare_threshold: None を追加し、prepared statementエラーを回避
         pool = ConnectionPool(DATABASE_URL, min_size=1, max_size=10, kwargs={"row_factory": dict_row, "sslmode": "require", "prepare_threshold": None})
     except Exception as e:
         logger.error(f"Failed to initialize ConnectionPool: {e}")
@@ -173,7 +172,6 @@ def clear_auth_cookies(res: Response):
     res.delete_cookie("sb-refresh-token")
 
 def get_user_id(request: Request) -> Optional[str]:
-    """トークンを検証し、必要ならリフレッシュ。結果はリクエストのstateにキャッシュする"""
     if hasattr(request.state, "user_id"):
         return request.state.user_id
 
@@ -197,14 +195,11 @@ def get_user_id(request: Request) -> Optional[str]:
     except Exception:
         pass
 
-    # アクセストークンが期限切れ等で使えず、リフレッシュトークンがある場合
     if not user_id and refresh_token:
         try:
             session_res = supabase.auth.refresh_session(refresh_token)
             if session_res and session_res.user:
                 user_id = session_res.user.id
-                # 注意: Cookieの更新はミドルウェア等で行うのが理想的ですが、
-                # 次回の明示的なアクション（投稿やページ遷移）時に反映されます。
         except Exception as e:
             logger.warning(f"Session refresh failed: {e}")
 
@@ -212,7 +207,6 @@ def get_user_id(request: Request) -> Optional[str]:
     return user_id
 
 def is_owner(request: Request, post: dict, user_id: Optional[str]) -> bool:
-    """投稿の編集権限をチェックする"""
     if user_id and post.get("user_id") is not None and str(post["user_id"]) == user_id:
         return True
     return post["id"] in parse_id_cookie(request, "my_posts")
@@ -890,7 +884,6 @@ async function drawPromoCard() {
     ctx.fillStyle = 'rgba(15, 23, 42, 0.85)'; ctx.fill();
     ctx.strokeStyle = 'rgba(51, 65, 85, 0.8)'; ctx.lineWidth = 2; ctx.stroke();
 
-    // 再描画用（テキスト類）
     let drawTextY = panelY + 70;
     ctx.fillStyle = '#ffffff'; ctx.font = '900 45px "Noto Sans JP", sans-serif';
     const drawnTitleLines = wrapCanvasText(ctx, title, 80, drawTextY, 920, 55, 2);
@@ -1419,7 +1412,7 @@ MYPAGE_HTML = """
         </p>
         <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
             <form action="/auth/login/google" method="post"><button type="submit" class="btn btn-outline" style="background: #fff; color: #444;">Googleでログイン</button></form>
-            <form action="/auth/login/twitter" method="post"><button type="submit" class="btn btn-outline" style="background: #000; color: #fff; border-color: #333;">X (Twitter) でログイン</button></form>
+            <form action="/auth/login/x" method="post"><button type="submit" class="btn btn-outline" style="background: #000; color: #fff; border-color: #333;">X (Twitter) でログイン</button></form>
         </div>
     </div>
     {% else %}
@@ -1767,7 +1760,7 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
 # ---------------------------------------------------------------------------
 @app.post("/auth/login/{provider}")
 def login(request: Request, provider: str):
-    if provider not in ["google", "twitter"]:
+    if provider not in ["google", "x"]:
         raise HTTPException(status_code=400, detail="Invalid provider")
     if not supabase:
         return alert_back('Supabaseの設定が存在しないためログインできません。')
