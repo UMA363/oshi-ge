@@ -16,6 +16,7 @@ from collections import defaultdict
 from functools import lru_cache
 from typing import List, Optional
 from urllib.parse import urlparse, urlencode
+from xml.sax.saxutils import escape as xml_escape
 
 import uvicorn
 from fastapi import FastAPI, Request, Form, HTTPException, Response, Depends
@@ -46,6 +47,14 @@ SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
 TRUSTED_PROXIES = int(os.environ.get("TRUSTED_PROXIES", "2"))
 
+# --- 運営者情報（環境変数で設定。未設定でも動作します） ---
+OPERATOR_NAME = os.environ.get("OPERATOR_NAME", "Oshi-Ge運営")
+CONTACT_EMAIL = os.environ.get("CONTACT_EMAIL", "")
+CONTACT_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSd-T-pvp84tbmSImJpUi79bhk1AW6CgEIeZVeh4vVgmDsZFlw/viewform?usp=publish-editor"
+ADSENSE_PUB_ID = "pub-6608111802250449"
+# アフィリエイトリンクを表示するために必要な布教投稿数
+AFFILIATE_MIN_POSTS = 3
+
 supabase: Client = None
 if SUPABASE_URL and SUPABASE_KEY:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -74,6 +83,150 @@ PLATFORMS = ["PC", "Switch", "Switch2", "PS5", "Xbox", "スマホ", "その他"]
 OSHI_POINTS = ["📖 ストーリーが最高", "👤 キャラが魅力的", "🎵 BGM・音楽が神", "⚔️ バトルが爽快", "🌍 世界観に浸れる", "⏳ やり込み要素あり", "🎬 演出がエモい", "👑 運営が神"]
 REPORT_REASONS = ["ネタバレ", "誹謗中傷", "スパム", "その他"]
 ALLOWED_IMAGE_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif")
+
+GENRE_SLUGS = {
+    "rpg": "RPG",
+    "action": "アクション",
+    "adventure": "アドベンチャー",
+    "simulation": "シミュレーション",
+    "fps-tps": "FPS / TPS",
+    "puzzle": "パズル",
+    "novel": "ノベル",
+    "horror": "ホラー",
+    "indie": "インディー",
+    "other": "その他 / 不明"
+}
+
+# ジャンルページ用の運営者オリジナル紹介文（各ジャンルページ冒頭に表示）
+GENRE_INTROS = {
+    "rpg": "RPGは、主人公の成長や長い物語をじっくり味わえるジャンルです。レベル上げや装備集めで少しずつ強くなる手応えがあり、世界観やキャラクターに愛着が湧きやすいのが魅力。ターン制、アクション寄り、オープンワールド型など遊び方の幅も広く、クリアまでに数十時間かかる作品も珍しくありません。ここでは、RPGが好きな人がネタバレを避けながら熱く語ったおすすめを集めています。「どんな人におすすめか」「プレイ時間の目安」を手がかりに、次の一本を探してみてください。",
+    "action": "アクションは、操作そのものの気持ちよさと、上達したときの達成感が楽しいジャンルです。爽快なバトルを楽しむタイプ、シビアな難易度に挑戦するタイプ、探索や移動の楽しさを重視するタイプなど、作品ごとに個性があります。ストーリーを追うのが苦手でも、短い時間で遊びやすい作品が多いのも特徴です。このページでは、アクションゲームの魅力を実際にプレイした人の言葉で紹介しています。難易度やプレイ時間についての感想も、選ぶときの参考にしてください。",
+    "adventure": "アドベンチャーは、物語や謎解き、探索を通じて世界に入り込むジャンルです。選択肢で展開が変わる作品、アイテムを集めて謎を解く作品、景色や雰囲気を味わう作品など、戦闘が少なくても没入感のある体験ができます。ストーリーが核になるため、ネタバレに特に配慮が必要なジャンルでもあります。ここでは、ネタバレレベルを明示した布教コメントを集めています。未プレイの人でも安心して読める紹介から、気になる一本を見つけてください。",
+    "simulation": "シミュレーションは、街づくり、経営、育成、生活体験など、自分で状況をコントロールしていく楽しさがあるジャンルです。正解が一つではなく、プレイヤーごとに違う物語が生まれるのが魅力で、気づけば時間を忘れて遊んでいる、ということも多いです。じっくり考えるのが好きな人や、コツコツ積み上げるのが好きな人に向いています。このページでは、シミュレーションゲームのハマりポイントや、遊び始めのコツを語った布教を集めています。",
+    "fps-tps": "FPS／TPSは、銃や武器を使って戦う一人称・三人称視点のシューティングです。対人戦で腕を競う作品、協力して敵に立ち向かう作品、物語を重視したシングルプレイ作品などがあり、同じジャンルでも体験が大きく変わります。反射神経だけでなく、立ち回りやチームワークも重要になります。ここでは、プレイスタイルや遊ぶ人数、操作の慣れやすさなど、選ぶときに役立つ視点を含んだ布教コメントを紹介しています。",
+    "puzzle": "パズルは、ひらめきや論理的な思考を楽しむジャンルです。短い時間でも遊べるものが多く、スキマ時間に向いています。落ち物、謎解き、パズルアクションなど種類も多彩で、解けたときの気持ちよさは他のジャンルにはない魅力です。難しすぎず簡単すぎないバランスも作品選びの大事なポイント。このページでは、パズルゲームの難易度やプレイ時間の目安など、実際に遊んだ人のリアルな感想を集めています。",
+    "novel": "ノベルは、文章と演出で物語を楽しむジャンルです。操作はシンプルで、読み進めることが中心のため、ゲームに慣れていない人でも入りやすいのが魅力です。恋愛、ミステリー、ホラー、群像劇など題材は幅広く、音楽やイラスト、声の演技が体験を大きく左右します。ネタバレが体験の価値に直結するジャンルなので、このページでは特にネタバレレベルを意識した布教コメントを集めています。",
+    "horror": "ホラーは、恐怖や緊張感を楽しむジャンルです。驚かされるタイプ、じわじわと不安が増していくタイプ、謎を追うタイプなど、怖さの質は作品によってさまざまです。一人でじっくり遊ぶ人もいれば、友達と悲鳴をあげながら楽しむ人もいます。苦手な人は「怖さの度合い」を事前に知っておくと安心です。ここでは、怖さの種類やおすすめの遊び方に触れた、ネタバレ配慮の布教コメントを紹介しています。",
+    "indie": "インディーゲームは、個人や小規模チームが作る、独創的なアイデアが光る作品群です。大作にはない尖った発想や、作り手の思いが伝わる手触りが魅力で、価格も手頃なものが多くあります。一方で知名度が低く、出会う機会が少ないのが難点です。Oshi-Geは、そんな隠れた良作をもっと知ってもらうための場所でもあります。このページでは、プレイした人だからこそ語れるインディーゲームの魅力を集めています。",
+    "other": "ジャンルの枠に収まらない作品や、ジャンルがわからない作品もこのカテゴリにまとめています。複数のジャンルをまたぐ作品や、新しい遊び方を提案する作品など、思わぬ出会いがあるかもしれません。「どんな人におすすめか」「プレイ時間」などの布教コメントを手がかりに、気になる一本を探してみてください。ジャンルが分かる方は、ゲーム情報の編集から正しいジャンルに変更してもらえると助かります。",
+}
+
+# 運営者が書いたガイド記事
+ARTICLES = [
+    {
+        "slug": "how-to-choose-game",
+        "title": "次に遊ぶゲームの選び方｜失敗しないための5つの視点",
+        "desc": "次の一本が決まらない人へ。遊べる時間、好みの体験、プラットフォーム、ネタバレ耐性、レビューの読み方の5つの視点から、自分に合うゲームを選ぶコツを解説します。",
+        "body": """
+<p>ゲームは数が多く、毎月のように新しい作品が発売されます。「何を遊べばいいかわからない」と悩むのは自然なことです。このガイドでは、自分に合う一本を見つけるための5つの視点を紹介します。</p>
+
+<h3>1. 自由に使える時間を考える</h3>
+<p>まず確認したいのは、ゲームに使える時間です。1日30分ほどしか遊べない人が、一度に何時間も遊ぶ前提の作品を選ぶと、途中で止まってしまいがちです。反対に、休日にまとまった時間がとれるなら、物語を一気に進められる長編も楽しめます。</p>
+<p>プレイ時間の目安は、クリアまでの時間と、寄り道を含めた時間の2種類を意識するとよいでしょう。Oshi-Geの布教コメントには「プレイ時間」の欄があるので、実際に遊んだ人の体感を参考にできます。</p>
+
+<h3>2. どんな体験を求めているか</h3>
+<p>同じ「面白い」でも、求めているものは人によって違います。</p>
+<ul>
+<li>物語に浸りたい（ストーリー重視）</li>
+<li>操作や戦闘の手応えを楽しみたい（アクション重視）</li>
+<li>考えてひらめく快感がほしい（パズル・謎解き重視）</li>
+<li>自分のペースでコツコツ積み上げたい（シミュレーション・育成重視）</li>
+<li>怖さや緊張感を味わいたい（ホラー）</li>
+</ul>
+<p>最近遊んで「楽しかった」と感じた作品を思い出し、何が良かったのかを言葉にしてみると、次の選択がしやすくなります。</p>
+
+<h3>3. 遊べる機種を確認する</h3>
+<p>どれだけ魅力的でも、持っている機種で遊べなければ始められません。PC、Switch、PS5、Xbox、スマホなど、対応機種は作品によって異なります。同じタイトルでも機種ごとに価格や操作感が変わる場合があるので、購入前に確認しましょう。</p>
+
+<h3>4. ネタバレにどこまで耐えられるか</h3>
+<p>ストーリーの展開を知らずに遊びたい人もいれば、ある程度知っていても楽しめる人もいます。自分がどちらのタイプかを知っておくと、情報収集の仕方が変わります。未プレイの作品を調べるときは、ネタバレの有無が明記されている紹介を選ぶと安心です。Oshi-Geでは、すべての布教コメントにネタバレレベルを設定でき、内容が隠れた状態で表示されます。</p>
+
+<h3>5. レビューは「誰に向けた意見か」を読む</h3>
+<p>高評価か低評価かだけを見ると、自分に合うかどうかは判断しにくいものです。「どんな人におすすめか」「どこが良かったか」「どんな人には合わなさそうか」が書かれたレビューは、判断材料として役に立ちます。単純な点数よりも、理由が具体的に書かれているものを優先して読みましょう。</p>
+
+<h3>気分で選びたいときは</h3>
+<p>どうしても決められないときは、Oshi-Geのトップページにある「目的からゲームを探す」や、ジャンル別のページから、気になるキーワードで探してみてください。思いがけない一本との出会いがあるかもしれません。</p>
+""",
+    },
+    {
+        "slug": "how-to-write-oshi-post",
+        "title": "ネタバレなしで魅力が伝わる布教文の書き方",
+        "desc": "好きなゲームの魅力を、ネタバレなしで未プレイの人に伝えるための書き方を解説。一言キャッチ、おすすめの相手、具体的な体験、ネタバレレベルの考え方と例文テンプレートを紹介します。",
+        "body": """
+<p>好きなゲームについて語りたいけれど、何を書けばいいかわからない。ネタバレをしてしまいそうで不安。そんな人のために、布教文の基本の組み立て方をまとめました。</p>
+
+<h3>ステップ1：まず「一言」で表現する</h3>
+<p>最初に、そのゲームを一言で表してみましょう。ジャンル名や「面白い」だけでは伝わりません。「遊び終わったあと、しばらく余韻が抜けなかった作品」「5分で始められて、気づくと1時間たっているゲーム」のように、体験を言葉にするのがコツです。</p>
+
+<h3>ステップ2：誰におすすめかを決める</h3>
+<p>万人におすすめと書くよりも、「ストーリー重視の人」「短時間でサクッと遊びたい人」のように対象を絞るほうが、読む人は自分に合うか判断しやすくなります。反対に、「こういう人には合わないかも」を正直に書くと、紹介への信頼感も高まります。</p>
+
+<h3>ステップ3：具体的な体験を書く</h3>
+<p>「神ゲー」「最高」だけでは、魅力は伝わりません。次のような具体的なポイントを一つか二つ入れてみてください。</p>
+<ul>
+<li>どの場面で、どんな気持ちになったか（ネタバレにならない範囲で）</li>
+<li>操作や仕組みのどこが気持ちよかったか</li>
+<li>音楽や雰囲気、画面の印象</li>
+<li>遊び始めてから面白くなるまでの時間</li>
+</ul>
+
+<h3>ステップ4：ネタバレレベルを正しく設定する</h3>
+<p>Oshi-Geでは、コメントの内容に応じて3段階のレベルを選べます。</p>
+<ul>
+<li><strong>Lv.0（ネタバレなし）</strong>：未プレイの人が読んでも問題ない内容。序盤の雰囲気や遊び心地など。</li>
+<li><strong>Lv.1（軽微なネタバレ）</strong>：序盤の設定など、体験に多少影響する内容。</li>
+<li><strong>Lv.2（ネタバレあり）</strong>：物語の展開や結末など、体験を大きく左右する内容。</li>
+</ul>
+<p>迷ったときは、一段階高いレベルを選んでおくと安全です。</p>
+
+<h3>避けたい書き方</h3>
+<ul>
+<li>結末や重要な展開を匂わせる書き方（「ラストは驚きの展開」も人によってはネタバレ）</li>
+<li>他の作品を下げて、紹介する作品を持ち上げる書き方</li>
+<li>特定の人やコミュニティへの攻撃的な表現</li>
+</ul>
+
+<h3>例文テンプレート</h3>
+<p>一言：〇〇な人にこそ遊んでほしい、△△なゲーム。<br>
+おすすめの人：□□が好きな人／短い時間で遊びたい人<br>
+推しポイント：◇◇の場面で、思わず声が出ました。遊び始めて1時間ほどで、仕組みの面白さに気づきます。<br>
+プレイ時間：クリアまで約〇時間</p>
+<p>この形に自分の言葉を当てはめるだけで、読みやすく魅力が伝わる布教文になります。ぜひ、あなたの推しゲームを紹介してください。</p>
+""",
+    },
+    {
+        "slug": "beginner-game-guide",
+        "title": "ゲーム初心者のための最初の一本の探し方",
+        "desc": "ゲームをあまり遊んだことがない人向けに、難易度、プレイ時間、操作のわかりやすさ、ジャンル別の入口、機種の選び方から、最初の一本を探すコツを紹介します。",
+        "body": """
+<p>「ゲームを始めてみたいけれど、何から遊べばいいかわからない」という声はよく聞かれます。ここでは、ゲーム初心者の人が最初の一本を選ぶときのポイントを紹介します。</p>
+
+<h3>難易度は「やさしめ」から</h3>
+<p>最初から難しいゲームを選ぶと、操作に慣れる前に挫折してしまうことがあります。難易度を選べる作品や、失敗してもやり直しやすい作品が安心です。紹介文に「初心者でも遊べる」「ゆっくり進められる」と書かれているかを目安にしてみましょう。</p>
+
+<h3>プレイ時間が短めの作品を選ぶ</h3>
+<p>数十時間かかる大作よりも、数時間でクリアできる作品のほうが、「最後まで遊べた」という成功体験を得やすくなります。1回のプレイが短く区切れる作品なら、忙しい日でも続けられます。</p>
+
+<h3>操作がシンプルかどうか</h3>
+<p>ボタンが多い作品は、慣れるまで時間がかかります。ボタン操作が少ない作品や、タッチ操作で遊べる作品は、初心者でも入りやすい傾向があります。操作が複雑でも、チュートリアルが丁寧な作品なら問題なく始められます。</p>
+
+<h3>ジャンル別の入口の考え方</h3>
+<ul>
+<li><strong>物語が好き</strong>：ノベルやアドベンチャー。操作が少なく、読み進めるだけで楽しめます。</li>
+<li><strong>頭を使うのが好き</strong>：パズル。短い時間で区切れるものが多いです。</li>
+<li><strong>のんびり遊びたい</strong>：シミュレーション。自分のペースで進められます。</li>
+<li><strong>体を動かす感覚が好き</strong>：アクション。簡単なモードがある作品から始めるのがおすすめです。</li>
+</ul>
+
+<h3>機種の選び方</h3>
+<p>すでにスマホやパソコンを持っているなら、まずは追加の機器を買わずに遊べる作品から始めるのが手軽です。据え置き機や携帯機を検討する場合は、遊びたい作品が対応しているかどうか、周りに一緒に遊べる人がいるかどうかを基準にしましょう。</p>
+
+<h3>体験談を参考にする</h3>
+<p>実際に遊んだ人の感想は、公式の紹介文よりも「初心者目線での遊びやすさ」が分かりやすいことがあります。Oshi-Geの布教コメントでは、「どんな人におすすめか」「プレイ時間」が書かれているので、最初の一本探しの参考にしてください。トップページの「初心者向け」ボタンからも探せます。</p>
+""",
+    },
+]
+ARTICLE_MAP = {a["slug"]: a for a in ARTICLES}
 
 FONT_URL = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Bold.otf"
 FONT_PATH = "/tmp/NotoSansCJKjp-Bold.otf"
@@ -156,6 +309,7 @@ def build_ogp(title: str, genre: str, catch: str, image_url: str) -> bytes:
     return buf.getvalue()
 
 env = Environment(autoescape=True, finalize=lambda x: "" if x is None else x)
+env.globals["GENRE_SLUGS"] = GENRE_SLUGS
 
 @lru_cache(maxsize=500)
 def get_template(source: str):
@@ -518,6 +672,23 @@ h2, h3 { margin-top: 0; color: var(--text-main); }
 .footer { text-align: center; padding: 2rem; border-top: 1px solid var(--border); margin-top: 3rem; color: var(--text-sub); font-size: 0.9rem; }
 .footer a { color: var(--text-sub); text-decoration: none; margin: 0 1rem; }
 .footer a:hover { color: var(--text-main); text-decoration: underline; }
+.footer .footer-genres a { margin: 0 0.5rem; font-size: 0.85rem; display: inline-block; }
+.prose { line-height: 1.9; color: #cbd5e1; font-size: 1.05rem; }
+.prose h3 { color: var(--accent); margin: 2rem 0 0.75rem; font-size: 1.25rem; border-left: 4px solid var(--accent); padding-left: 0.75rem; }
+.prose p { margin: 0 0 1rem; }
+.prose ul { margin: 0 0 1rem; padding-left: 1.4rem; }
+.prose li { margin-bottom: 0.4rem; }
+.prose a { color: #3b82f6; }
+.prose table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+.prose th, .prose td { text-align: left; padding: 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.prose th { width: 30%; color: var(--text-sub); font-weight: bold; }
+.guide-link-card { display: block; text-decoration: none; background: #0f172a; border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem; margin-bottom: 1rem; transition: 0.2s; }
+.guide-link-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.guide-link-card .t { color: var(--text-main); font-weight: bold; font-size: 1.1rem; margin-bottom: 0.4rem; }
+.guide-link-card .d { color: var(--text-sub); font-size: 0.9rem; }
+.genre-chip-row { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.genre-chip { display: inline-block; padding: 0.4rem 0.9rem; border-radius: 9999px; border: 1px solid var(--border); color: var(--text-main); text-decoration: none; font-size: 0.9rem; font-weight: bold; background: #0f172a; transition: 0.2s; }
+.genre-chip:hover { border-color: var(--accent); color: var(--accent); }
 
 @media (max-width: 600px) { 
     html { font-size: 16px; }
@@ -1067,6 +1238,7 @@ BASE_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ page_title }}</title>
     <meta name="description" content="{{ og_description }}">
+    {% if noindex %}<meta name="robots" content="noindex,follow">{% endif %}
     <meta property="og:type" content="website">
     <meta property="og:title" content="{{ page_title }}">
     <meta property="og:description" content="{{ og_description }}">
@@ -1112,7 +1284,8 @@ BASE_HTML = """
 <body>
     <header class="header-container">
         <h1><a href="/">🎮 Oshi-Ge</a></h1>
-        <div style="display:flex; gap: 1rem;">
+        <div style="display:flex; gap: 1rem; flex-wrap: wrap; justify-content: center;">
+            <a href="/guide" class="btn btn-outline btn-small" style="color:var(--text-main);">📖 ガイド</a>
             <a href="/games/new" class="btn btn-primary btn-small" style="color: #ffffff;">＋ ゲームを布教する</a>
             <a href="/mypage" class="btn btn-outline btn-small" style="color:var(--text-main);">👤 マイページ</a>
         </div>
@@ -1212,10 +1385,16 @@ BASE_HTML = """
     </div>
     
     <footer class="footer">
+        <div class="footer-genres" style="margin-bottom: 1rem;">
+            {% for slug, name in GENRE_SLUGS.items() %}<a href="/genres/{{ slug }}">{{ name }}</a>{% endfor %}
+        </div>
         <div>
             <a href="/">トップページ</a> | 
-            <a href="/privacy">プライバシーポリシー・免責事項</a>
-            <a href="https://docs.google.com/forms/d/e/1FAIpQLSd-T-pvp84tbmSImJpUi79bhk1AW6CgEIeZVeh4vVgmDsZFlw/viewform?usp=publish-editor" target="_blank" rel="noopener">ご意見・バグ報告</a>
+            <a href="/guide">ガイド</a> | 
+            <a href="/about">運営者情報</a> | 
+            <a href="/terms">利用規約</a> | 
+            <a href="/privacy">プライバシーポリシー・免責事項</a> | 
+            <a href="/contact">お問い合わせ</a>
         </div>
         <div style="margin-top: 1rem;">&copy; 2026 Oshi-Ge</div>
     </footer>
@@ -1226,12 +1405,30 @@ BASE_HTML = """
 """
 
 INDEX_HTML = """
+{% if genre_intro %}
+<div class="card" style="border-color: var(--accent);">
+    <h2 style="color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1rem;">{{ genre }}のおすすめゲーム布教</h2>
+    <p style="margin: 0; color: #cbd5e1; line-height: 1.9;">{{ genre_intro }}</p>
+</div>
+{% endif %}
+
+{% if show_intro %}
 <!-- お題バナー -->
 <div style="background: linear-gradient(135deg, #f59e0b, #d97706); border-radius: 12px; padding: 1.5rem; margin-bottom: 2rem; text-align: center; box-shadow: 0 10px 25px rgba(245, 158, 11, 0.3); border: 2px solid #fbbf24; cursor: pointer; transition: transform 0.2s;" onclick="location.href='/games/new'" onmouseover="this.style.transform='translateY(-4px)'" onmouseout="this.style.transform='translateY(0)'">
     <div style="color: #fff; font-weight: bold; font-size: 0.95rem; margin-bottom: 0.5rem; letter-spacing: 0.1em;">🔥 今週のピックアップお題</div>
     <h2 style="color: #fff; margin: 0 0 1rem 0; font-size: 1.8rem; text-shadow: 0 2px 4px rgba(0,0,0,0.3);">「100時間以上溶かした時間泥棒ゲーム」</h2>
     <div class="btn" style="background: #fff; color: #d97706; padding: 0.8rem 2.5rem; border-radius: 30px; font-weight: 900; box-shadow: 0 4px 10px rgba(0,0,0,0.2);">お題に沿って布教を書く ✍️</div>
 </div>
+
+<div class="card">
+    <h2 style="color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1rem;">Oshi-Geとは</h2>
+    <div class="prose">
+        <p>Oshi-Geは、好きなゲームの魅力を「ネタバレなし」で伝え合うゲーム布教サイトです。投稿には3段階のネタバレレベルがあり、ストーリーに関わる内容は初期状態で隠れるため、未プレイの人も安心して読めます。</p>
+        <p>気になるゲームのことを知りたいときは、ジャンル別のページや「目的からゲームを探す」から探せます。「誰におすすめか」「プレイ時間」「推しポイント」が書かれているので、自分に合うかどうかを判断する手がかりになります。遊んだことのあるゲームがあれば、ぜひあなたの言葉で布教してください。</p>
+        <p>書き方や選び方のコツは、<a href="/guide">ガイド記事</a>にまとめています。サイトの方針は<a href="/about">運営者情報</a>をご覧ください。</p>
+    </div>
+</div>
+{% endif %}
 
 <div class="discover-panel">
     <h3>🔎 目的からゲームを探す</h3>
@@ -1245,6 +1442,12 @@ INDEX_HTML = """
         <a class="quick-filter {% if q == 'インディー' %}active{% endif %}" href="/?q=インディー">💎 インディー</a>
         <a class="quick-filter {% if q == '初心者' %}active{% endif %}" href="/?q=初心者">🌱 初心者向け</a>
         <a class="quick-filter" href="#" onclick="startGacha(event)" style="background: linear-gradient(45deg, #ec4899, #8b5cf6); color: white; border: none; font-size: 1.05rem; box-shadow: 0 4px 15px rgba(236, 72, 153, 0.4);">🎰 神ゲー発掘ガチャ</a>
+    </div>
+    <div style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--border);">
+        <div style="color: var(--text-sub); font-size: 0.85rem; margin-bottom: 0.6rem; font-weight: bold;">ジャンルから探す</div>
+        <div class="genre-chip-row">
+            {% for slug, name in GENRE_SLUGS.items() %}<a class="genre-chip" href="/genres/{{ slug }}">{{ name }}</a>{% endfor %}
+        </div>
     </div>
 </div>
 
@@ -1319,6 +1522,13 @@ INDEX_HTML = """
                 {% else %}<div style="color: var(--text-sub); font-size: 0.9rem;">今週の布教はまだありません。</div>{% endfor %}
             </div>
         </div>
+
+        <div class="card" style="padding: 1.2rem;">
+            <h3 style="margin-top: 0; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem;">📖 ガイド</h3>
+            {% for a in articles %}
+            <a href="/guide/{{ a.slug }}" style="display: block; color: var(--text-main); text-decoration: none; font-size: 0.9rem; font-weight: bold; padding: 0.5rem 0; border-bottom: 1px dashed var(--border);">{{ a.title }}</a>
+            {% endfor %}
+        </div>
     </div>
 </div>
 """
@@ -1343,12 +1553,14 @@ GAME_HTML = """
         <p style="margin: 0; white-space: pre-wrap; color: #cbd5e1;">{{ game.description }}</p>
     </div>
     
+    {% if show_affiliate %}
     <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
         <a href="https://www.amazon.co.jp/s?k={{ game.title | urlencode }}&i=videogames&tag=oshige06-22" target="_blank" rel="noopener sponsored" class="btn btn-outline btn-small" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.5);">🛒 Amazonで探す</a>
         <a href="https://search.rakuten.co.jp/search/mall/{{ game.title | urlencode }}/?tg=101240" target="_blank" rel="noopener sponsored" class="btn btn-outline btn-small" style="color: #ef4444; border-color: rgba(239, 68, 68, 0.5);">🛍 楽天市場で探す</a>
         <a href="https://store.steampowered.com/search/?term={{ game.title | urlencode }}" target="_blank" rel="noopener" class="btn btn-outline btn-small" style="color: #cbd5e1; border-color: rgba(203, 213, 225, 0.5);">🎮 Steamで探す</a>
     </div>
     <div style="font-size: 0.75rem; color: var(--text-sub); margin-bottom: 1.5rem;">当サイトはAmazonアソシエイト・楽天アフィリエイトのリンクを含みます。Amazonのアソシエイトとして、適格販売により収入を得ています。</div>
+    {% endif %}
 
     <div style="display: flex; gap: 0.5rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
         <button type="button" class="btn btn-x" onclick='shareGameToX({{ (game.title or "") | tojson }}, {{ (game.developer_x_id or "") | tojson }})'>X でゲームを共有</button>
@@ -1370,7 +1582,7 @@ GAME_HTML = """
                 <li>どんな人におすすめ？</li>
                 <li>遊んだあと、どんな気持ちになった？</li>
             </ul>
-            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！</div>
+            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！ 詳しくは<a href="/guide/how-to-write-oshi-post" style="color:#3b82f6;">布教文の書き方ガイド</a>をどうぞ。</div>
         </div>
 
         <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
@@ -1403,6 +1615,7 @@ GAME_HTML = """
             </div>
         </div>
         <div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required placeholder="熱い思いをぶつけてください。"></textarea></div>
+        <div style="font-size: 0.8rem; color: var(--text-sub); margin-bottom: 1rem;">投稿することで<a href="/terms" target="_blank" style="color:#3b82f6;">利用規約</a>に同意したものとみなします。</div>
         <button type="submit" class="btn btn-primary" style="width: 100%; font-size:1.1rem; padding: 1rem;">布教を投稿する</button>
     </form>
 </details>
@@ -1622,9 +1835,10 @@ NEW_GAME_HTML = """
         <div class="form-group"><label>ゲーム画像（任意・自動で最適なサイズに圧縮されます）:</label>
             <input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;">
             <input type="hidden" name="image_base64" id="image_base64">
+            <div style="font-size: 0.8rem; color: var(--text-sub); margin-top: 0.4rem;">※ご自身で撮影したスクリーンショットなど、掲載する権利のある画像のみアップロードしてください。公式の宣伝素材などを使う場合は、権利者のガイドラインの範囲内でお願いします。詳しくは<a href="/terms" target="_blank" style="color:#3b82f6;">利用規約</a>をご確認ください。</div>
             <div id="image_preview" style="margin-top: 1rem; display: none;"><img id="preview_img" src="" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div>
         </div>
-        <div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ description }}</textarea></div>
+        <div class="form-group"><label>ゲームの簡単な説明（ご自身の言葉で書いてください）:</label><textarea name="description" rows="4">{{ description }}</textarea></div>
 
         <h3 style="margin-top: 2rem; color: var(--accent); border-top: 1px dashed var(--border); padding-top: 1.5rem;">🔥 最初の布教コメント</h3>
         
@@ -1636,7 +1850,7 @@ NEW_GAME_HTML = """
                 <li>どんな人におすすめ？</li>
                 <li>遊んだあと、どんな気持ちになった？</li>
             </ul>
-            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！</div>
+            <div style="font-size: 0.8rem; color: #94a3b8; margin-top: 0.4rem;">※全部に答える必要はありません。ネタバレにはご注意ください！ 詳しくは<a href="/guide/how-to-write-oshi-post" target="_blank" style="color:#3b82f6;">布教文の書き方ガイド</a>をどうぞ。</div>
         </div>
 
         <div class="form-group"><label>布教ネーム（匿名可）:</label><input type="text" name="username" value="名無しの布教者" required></div>
@@ -1669,6 +1883,7 @@ NEW_GAME_HTML = """
             </div>
         </div>
         <div class="form-group"><label>布教コメントの詳細（必須）:</label><textarea name="content" rows="4" required placeholder="熱い思いをぶつけてください。"></textarea></div>
+        <div style="font-size: 0.8rem; color: var(--text-sub); margin-bottom: 1rem;">登録することで<a href="/terms" target="_blank" style="color:#3b82f6;">利用規約</a>に同意したものとみなします。</div>
         
         <button type="submit" class="btn btn-primary" style="width: 100%; font-size:1.1rem; padding: 1rem; margin-top: 1rem;">ゲームを登録して布教する</button>
     </form>
@@ -1699,6 +1914,7 @@ EDIT_GAME_HTML = """
         <div class="form-group"><label>ゲーム画像（新しくアップロードして変更する場合のみ選択）:</label>
             <input type="file" id="image_upload" accept="image/*" style="background:transparent; border:none; padding:0;">
             <input type="hidden" name="image_base64" id="image_base64">
+            <div style="font-size: 0.8rem; color: var(--text-sub); margin-top: 0.4rem;">※掲載する権利のある画像のみアップロードしてください。詳しくは<a href="/terms" target="_blank" style="color:#3b82f6;">利用規約</a>をご確認ください。</div>
             <div id="image_preview" style="margin-top: 1rem; display: {% if game.image_url %}block{% else %}none{% endif %};"><img id="preview_img" src="{{ game.image_url }}" style="max-width: 100%; max-height: 200px; border-radius: 8px; border: 1px solid var(--border);"></div>
         </div>
         <div class="form-group"><label>ゲームの簡単な説明:</label><textarea name="description" rows="4">{{ game.description }}</textarea></div>
@@ -1770,11 +1986,14 @@ PRIVACY_HTML = """
     当サイトに掲載された内容によって生じた損害等の一切の責任を負いかねますのでご了承ください。</p>
     
     <h3 style="color: var(--accent);">ユーザー投稿データおよびアカウント情報の取り扱い</h3>
-    <p>当サイトはユーザーが自由にゲームの布教（感想・レビュー等）を投稿できるサービスです。投稿された文章に関する責任は投稿者に帰属します。スパム、誹謗中傷、極端なネタバレなど、管理者が不適切と判断したコンテンツは予告なく削除・非表示にする場合があります。<br>
+    <p>当サイトはユーザーが自由にゲームの布教（感想・レビュー等）を投稿できるサービスです。投稿された文章に関する責任は投稿者に帰属します。スパム、誹謗中傷、極端なネタバレなど、管理者が不適切と判断したコンテンツは予告なく削除・非表示にする場合があります。投稿ルールの詳細は<a href="/terms" style="color: #3b82f6;">利用規約</a>をご確認ください。<br>
     また、ログイン機能（Google連携やX連携等）を利用した場合、当サイトは認証に必要な最小限の識別子（UUID等）のみを保持し、ユーザーのSNSアカウント自体に勝手に投稿したり、パスワードを収集することはありません。</p>
     
     <h3 style="color: var(--accent);">アカウントの削除について</h3>
-    <p>当サイトに紐付けたアカウントデータ（およびご自身の投稿履歴）の削除をご希望の場合は、サイト管理者（公式Xアカウント等）まで個別にご連絡いただくことで対応いたします。</p>
+    <p>当サイトに紐付けたアカウントデータ（およびご自身の投稿履歴）の削除をご希望の場合は、<a href="/contact" style="color: #3b82f6;">お問い合わせページ</a>の窓口まで個別にご連絡いただくことで対応いたします。</p>
+
+    <h3 style="color: var(--accent);">運営者について</h3>
+    <p>運営者の情報は<a href="/about" style="color: #3b82f6;">運営者情報</a>のページに掲載しています。</p>
 </div>
 """
 
@@ -1822,7 +2041,161 @@ ADMIN_HTML = """
 </div>
 """
 
-def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, **kwargs):
+# ---------------------------------------------------------------------------
+# 運営者作成コンテンツ用テンプレート（ガイド・運営者情報・利用規約・お問い合わせ）
+# ---------------------------------------------------------------------------
+GUIDE_INDEX_HTML = """
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1rem;">📖 ガイド</h2>
+    <p style="color: var(--text-sub); margin-bottom: 1.5rem;">ゲーム選びのコツや、布教文の書き方など、Oshi-Geをより楽しむための記事をまとめています。</p>
+    {% for a in articles %}
+    <a class="guide-link-card" href="/guide/{{ a.slug }}">
+        <div class="t">{{ a.title }}</div>
+        <div class="d">{{ a.desc }}</div>
+    </a>
+    {% endfor %}
+    <div style="margin-top: 2rem; padding-top: 1.5rem; border-top: 1px dashed var(--border);">
+        <div style="color: var(--text-sub); font-size: 0.9rem; font-weight: bold; margin-bottom: 0.6rem;">ジャンルから探す</div>
+        <div class="genre-chip-row">
+            {% for slug, name in GENRE_SLUGS.items() %}<a class="genre-chip" href="/genres/{{ slug }}">{{ name }}</a>{% endfor %}
+        </div>
+    </div>
+</div>
+"""
+
+ARTICLE_HTML = """
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <div style="font-size: 0.85rem; color: var(--text-sub); margin-bottom: 0.5rem;"><a href="/guide" style="color: var(--text-sub);">ガイド</a> &gt; 記事</div>
+    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.75rem; margin-bottom: 1.5rem; font-size: 1.7rem; line-height: 1.4;">{{ article.title }}</h2>
+    <div class="prose">{{ article.body | safe }}</div>
+
+    <div style="margin-top: 2.5rem; padding-top: 1.5rem; border-top: 1px dashed var(--border);">
+        <div style="color: var(--text-sub); font-size: 0.9rem; font-weight: bold; margin-bottom: 0.8rem;">あわせて読みたい</div>
+        {% for a in articles %}{% if a.slug != article.slug %}
+        <a class="guide-link-card" href="/guide/{{ a.slug }}"><div class="t">{{ a.title }}</div></a>
+        {% endif %}{% endfor %}
+    </div>
+    <div style="margin-top: 1.5rem; text-align: center;">
+        <a href="/" class="btn btn-primary">布教されているゲームを見る</a>
+    </div>
+</div>
+"""
+
+ABOUT_HTML = """
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">運営者情報</h2>
+    <div class="prose">
+        <h3>Oshi-Geについて</h3>
+        <p>Oshi-Geは、好きなゲームの魅力をネタバレなしで伝え合うためのゲーム布教コミュニティです。「次に遊ぶゲームが見つからない」という人と、「好きなゲームをもっと知ってほしい」という人を結びつけることを目的としています。</p>
+
+        <h3>サイトの特徴</h3>
+        <ul>
+            <li><strong>ネタバレレベルの明示</strong>：すべての布教コメントに3段階のレベルを設定でき、ストーリーに関わる内容は初期状態で隠れます。</li>
+            <li><strong>選びやすい情報設計</strong>：「一言で布教すると？」「誰におすすめ？」「プレイ時間」「推しポイント」など、遊ぶかどうかを判断しやすい項目を用意しています。</li>
+            <li><strong>布教カード</strong>：投稿内容から、SNSで共有できる画像を自動で作成できます。</li>
+            <li><strong>布教リクエスト</strong>：気になるゲームの紹介を、他のユーザーにお願いできます。</li>
+        </ul>
+
+        <h3>運営方針</h3>
+        <ul>
+            <li>投稿はスパム・誹謗中傷・過度なネタバレがないか、通報とあわせて管理者が確認し、不適切なものは削除します。</li>
+            <li>ゲームの画像は、権利を持つものだけを掲載する方針です。権利者の方からの削除依頼には速やかに対応します。</li>
+            <li>当サイトはゲームの公式サイトではなく、各ゲームの開発元・販売元とは関係ありません。</li>
+            <li>ガイド記事やジャンル紹介は運営者が執筆し、随時追加・更新します。</li>
+        </ul>
+
+        <h3>広告・アフィリエイトについて</h3>
+        <p>当サイトは、Google AdSense、Amazonアソシエイト、楽天アフィリエイトを利用しています（利用開始前のものを含みます）。商品リンクは、投稿が一定数集まったゲームのページにのみ表示し、紹介内容の評価には影響させません。</p>
+
+        <h3>運営者</h3>
+        <table>
+            <tr><th>サイト名</th><td>Oshi-Ge（推しゲー）</td></tr>
+            <tr><th>運営者</th><td>{{ operator_name }}</td></tr>
+            <tr><th>お問い合わせ</th><td><a href="/contact">お問い合わせページ</a></td></tr>
+            <tr><th>開設</th><td>2026年</td></tr>
+        </table>
+    </div>
+</div>
+"""
+
+TERMS_HTML = """
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">利用規約</h2>
+    <div class="prose">
+        <p>この利用規約（以下「本規約」）は、Oshi-Ge（以下「当サイト」）の利用条件を定めるものです。当サイトを利用した時点で、本規約に同意したものとみなします。</p>
+
+        <h3>第1条（サービス内容）</h3>
+        <p>当サイトは、ユーザーがゲームの魅力を紹介（以下「布教」）し、ゲーム情報を登録・閲覧できるサービスです。会員登録なしでも利用できますが、一部の機能（ゲーム情報の編集など）にはログインが必要です。</p>
+
+        <h3>第2条（投稿のルール）</h3>
+        <p>ユーザーは、次の内容を投稿してはいけません。</p>
+        <ul>
+            <li>設定したネタバレレベルに合わない内容（例：Lv.0に結末や重要な展開を書く）</li>
+            <li>他者への誹謗中傷、差別的な表現、攻撃的な内容</li>
+            <li>スパム、無関係な宣伝、同じ内容の繰り返し投稿</li>
+            <li>個人情報の公開や、他者のプライバシーを侵害する内容</li>
+            <li>法令や公序良俗に反する内容</li>
+            <li>他の文章や作品を無断で転載したもの</li>
+        </ul>
+
+        <h3>第3条（画像の掲載について）</h3>
+        <p>ゲーム画像をアップロードする場合は、次の点を守ってください。</p>
+        <ul>
+            <li>ご自身で撮影したスクリーンショットなど、掲載する権利のある画像、または権利者が許可している画像のみを使用してください。</li>
+            <li>公式の宣伝素材を使用する場合は、権利者が定めるガイドラインの範囲内でご利用ください。</li>
+            <li>第三者の著作権、肖像権、その他の権利を侵害する画像は掲載できません。</li>
+        </ul>
+        <p>権利者の方から削除の申し出があった場合や、権利侵害のおそれがあると判断した場合は、予告なく画像を削除することがあります。削除のご依頼は<a href="/contact">お問い合わせページ</a>からご連絡ください。</p>
+
+        <h3>第4条（投稿内容の権利）</h3>
+        <p>投稿された文章の著作権は、投稿者に帰属します。ただし、投稿者は当サイトに対し、当サイトの運営・改善・宣伝に必要な範囲で、投稿内容を無償で利用（表示、複製、加工、布教カードなどの形式への変換を含む）することを許諾するものとします。</p>
+
+        <h3>第5条（投稿の削除・利用制限）</h3>
+        <p>管理者は、本規約に違反する、または不適切と判断した投稿を、予告なく削除または非表示にできます。また、悪質な場合は、当該ユーザーの利用を制限することがあります。</p>
+
+        <h3>第6条（広告・アフィリエイト）</h3>
+        <p>当サイトには、広告およびアフィリエイトリンクが含まれます。リンク先の商品やサービスについて、当サイトは責任を負いません。</p>
+
+        <h3>第7条（免責）</h3>
+        <ul>
+            <li>投稿内容の正確性や完全性について、当サイトは保証しません。</li>
+            <li>当サイトの利用によって生じた損害について、当サイトに故意または重大な過失がある場合を除き、責任を負いません。</li>
+            <li>システムの保守や障害などにより、予告なくサービスを中断・変更・終了することがあります。</li>
+        </ul>
+
+        <h3>第8条（規約の変更）</h3>
+        <p>本規約は、必要に応じて変更することがあります。変更後の規約は、当サイトに掲載した時点から効力を持ちます。</p>
+
+        <p style="margin-top: 2rem; color: var(--text-sub);">制定日：2026年</p>
+    </div>
+</div>
+"""
+
+CONTACT_HTML = """
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <h2 style="border-bottom: 2px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1.5rem;">お問い合わせ</h2>
+    <div class="prose">
+        <p>Oshi-Geに関するご質問、ご意見、不具合のご報告は、下記の窓口までお寄せください。</p>
+        <h3>お問い合わせフォーム</h3>
+        <p><a href="{{ contact_form_url }}" target="_blank" rel="noopener" class="btn btn-primary" style="color:#fff; text-decoration:none;">お問い合わせフォームを開く</a></p>
+        {% if contact_email %}
+        <h3>メールでのお問い合わせ</h3>
+        <p>{{ contact_email }}</p>
+        {% endif %}
+        <h3>こんなときにご利用ください</h3>
+        <ul>
+            <li>投稿やゲーム情報の削除依頼（権利者の方、投稿者ご本人を含みます）</li>
+            <li>ゲーム画像に関する権利侵害のご連絡</li>
+            <li>アカウントデータ（連携情報・投稿履歴）の削除依頼</li>
+            <li>不具合や、使いにくい点のご報告</li>
+            <li>その他、サイトについてのご意見</li>
+        </ul>
+        <p>内容を確認のうえ、順次対応します。お返事までにお時間をいただく場合があります。</p>
+    </div>
+</div>
+"""
+
+def render_page(request: Request, content_template_str, is_top=False, page_title=None, og_description=None, og_image=None, game_schema=None, noindex=False, **kwargs):
     content_html = get_template(content_template_str).render(user_id=get_user_id(request), **kwargs)
     final_title = page_title if page_title else "Oshi-Ge | ネタバレなしゲーム布教サイト"
     final_desc = og_description if og_description else "未プレイの人にこそ読んでほしい、熱量100%のゲーム布教コミュニティ。"
@@ -1832,7 +2205,7 @@ def render_page(request: Request, content_template_str, is_top=False, page_title
     html = get_template(BASE_HTML).render(
         request=request, css=Markup(CSS), js=Markup(JS), content=Markup(content_html), is_top=is_top,
         page_title=final_title, og_description=final_desc, og_image=og_image, game_schema=game_schema,
-        base_url=get_base_url(request), canonical_url=canonical_url, **kwargs
+        base_url=get_base_url(request), canonical_url=canonical_url, noindex=noindex, **kwargs
     )
     return HTMLResponse(html)
 
@@ -1857,6 +2230,82 @@ def ogp_game(game_id: int):
         ).fetchone()
     png = build_ogp(game["title"] or "", game["genre"] or "", (latest or {}).get("catchphrase") or "", game["image_url"] or "")
     return Response(content=png, media_type="image/png", headers=OGP_HEADERS)
+
+
+# ---------------------------------------------------------------------------
+# SEO: robots.txt / sitemap.xml / ads.txt
+# ---------------------------------------------------------------------------
+@app.get("/robots.txt")
+def robots_txt(request: Request):
+    base = get_base_url(request)
+    body = (
+        "User-agent: Mediapartners-Google\n"
+        "Disallow:\n"
+        "\n"
+        "User-agent: *\n"
+        "Disallow: /mypage\n"
+        "Disallow: /admin\n"
+        "Disallow: /auth/\n"
+        "Disallow: /api/\n"
+        "Disallow: /proxy-image\n"
+        "Disallow: /games/new\n"
+        "Disallow: /games/random\n"
+        "Disallow: /games/*/edit\n"
+        "Disallow: /games/*/posts/\n"
+        "Disallow: /posts/\n"
+        "Disallow: /requests\n"
+        "\n"
+        f"Sitemap: {base}/sitemap.xml\n"
+    )
+    return Response(content=body, media_type="text/plain; charset=utf-8")
+
+@app.get("/ads.txt")
+def ads_txt():
+    body = f"google.com, {ADSENSE_PUB_ID}, DIRECT, f08c47fec0942fa0\n"
+    return Response(content=body, media_type="text/plain; charset=utf-8")
+
+@app.get("/sitemap.xml")
+def sitemap_xml(request: Request):
+    base = get_base_url(request)
+    urls = []  # (path, lastmod or None)
+
+    for path in ["/", "/guide", "/about", "/terms", "/privacy", "/contact"]:
+        urls.append((path, None))
+    for a in ARTICLES:
+        urls.append((f"/guide/{a['slug']}", None))
+
+    try:
+        with get_db_connection() as conn:
+            genre_rows = conn.execute("SELECT genre, COUNT(*) AS c FROM games GROUP BY genre").fetchall()
+            game_rows = conn.execute('''
+                SELECT g.id, GREATEST(g.created_at, COALESCE(MAX(p.created_at), g.created_at)) AS lastmod
+                FROM games g
+                JOIN posts p ON p.game_id = g.id
+                GROUP BY g.id
+                HAVING COUNT(p.id) >= 1 AND (COALESCE(MAX(g.description), '') <> '' OR COUNT(p.id) >= 2)
+                ORDER BY g.id
+            ''').fetchall()
+    except Exception:
+        logger.exception("sitemap query failed")
+        genre_rows, game_rows = [], []
+
+    genre_counts = {r["genre"]: r["c"] for r in genre_rows}
+    for slug, name in GENRE_SLUGS.items():
+        if genre_counts.get(name, 0) > 0:
+            urls.append((f"/genres/{slug}", None))
+    for r in game_rows:
+        lm = r["lastmod"].strftime("%Y-%m-%d") if r.get("lastmod") else None
+        urls.append((f"/games/{r['id']}", lm))
+
+    parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for path, lm in urls:
+        parts.append("<url>")
+        parts.append(f"<loc>{xml_escape(base + path)}</loc>")
+        if lm:
+            parts.append(f"<lastmod>{lm}</lastmod>")
+        parts.append("</url>")
+    parts.append("</urlset>")
+    return Response(content="\n".join(parts), media_type="application/xml")
 
 
 # ---------------------------------------------------------------------------
@@ -1976,7 +2425,7 @@ def admin_dashboard(request: Request, admin: str = Depends(verify_admin)):
             ORDER BY r.created_at DESC LIMIT 50
         ''').fetchall()
         
-    return render_page(request, ADMIN_HTML, page_title="管理ダッシュボード - Oshi-Ge", reports=reports)
+    return render_page(request, ADMIN_HTML, page_title="管理ダッシュボード - Oshi-Ge", noindex=True, reports=reports)
 
 @app.post("/admin/delete_post")
 def admin_delete_post(request: Request, post_id: int = Form(...), admin: str = Depends(verify_admin)):
@@ -1988,12 +2437,57 @@ def admin_delete_post(request: Request, post_id: int = Form(...), admin: str = D
 
 
 # ---------------------------------------------------------------------------
-# Main Routing
+# Static / Editorial Pages (ガイド・運営者情報・利用規約・お問い合わせ)
 # ---------------------------------------------------------------------------
-
 @app.get("/privacy")
 def read_privacy(request: Request):
     return render_page(request, PRIVACY_HTML, page_title="プライバシーポリシー・免責事項 - Oshi-Ge")
+
+@app.get("/about")
+def read_about(request: Request):
+    return render_page(
+        request, ABOUT_HTML, page_title="運営者情報 - Oshi-Ge",
+        og_description="Oshi-Geは、好きなゲームの魅力をネタバレなしで伝え合うゲーム布教コミュニティです。サイトの特徴や運営方針、運営者情報をご紹介します。",
+        operator_name=OPERATOR_NAME,
+    )
+
+@app.get("/terms")
+def read_terms(request: Request):
+    return render_page(
+        request, TERMS_HTML, page_title="利用規約 - Oshi-Ge",
+        og_description="Oshi-Geの利用規約。投稿のルール、画像の掲載、権利の扱い、免責事項などを定めています。",
+    )
+
+@app.get("/contact")
+def read_contact(request: Request):
+    return render_page(
+        request, CONTACT_HTML, page_title="お問い合わせ - Oshi-Ge",
+        og_description="Oshi-Geへのお問い合わせ窓口です。ご意見、不具合のご報告、削除依頼などはこちらからどうぞ。",
+        contact_form_url=CONTACT_FORM_URL, contact_email=CONTACT_EMAIL,
+    )
+
+@app.get("/guide")
+def read_guide_index(request: Request):
+    return render_page(
+        request, GUIDE_INDEX_HTML, page_title="ガイド｜ゲーム選びと布教のコツ - Oshi-Ge",
+        og_description="次に遊ぶゲームの選び方、ネタバレなしの布教文の書き方、初心者向けの最初の一本の探し方など、ゲームをもっと楽しむための記事をまとめています。",
+        articles=ARTICLES,
+    )
+
+@app.get("/guide/{slug}")
+def read_guide_article(request: Request, slug: str):
+    article = ARTICLE_MAP.get(slug)
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return render_page(
+        request, ARTICLE_HTML, page_title=f"{article['title']} - Oshi-Ge",
+        og_description=article["desc"], article=article, articles=ARTICLES,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Main Routing
+# ---------------------------------------------------------------------------
 
 @app.get("/proxy-image")
 def proxy_image(url: str):
@@ -2055,24 +2549,18 @@ def read_root(request: Request, q: str = "", genre: str = "", platform: str = ""
         weekly_ranking = conn.execute('''SELECT g.id, g.title, g.image_url, COALESCE(SUM(COALESCE(p.likes,0) + COALESCE(p.wanna_play,0) + COALESCE(p.agree,0)), 0) as weekly_likes FROM games g JOIN posts p ON g.id = p.game_id WHERE p.created_at >= NOW() - INTERVAL '7 days' GROUP BY g.id ORDER BY weekly_likes DESC, g.created_at DESC LIMIT 5''').fetchall()
         requests = conn.execute('SELECT * FROM requests ORDER BY created_at DESC LIMIT 5').fetchall()
 
-    return render_page(request, INDEX_HTML, is_top=True, games=games, q=q, genre=genre, platform=platform, sort=sort, weekly_ranking=weekly_ranking, requests=requests)
+    # 検索・絞り込み・並び替え付きのURLは重複・低価値ページになるため noindex
+    has_filters = bool(q or genre or platform or sort != "new")
+
+    return render_page(
+        request, INDEX_HTML, is_top=True, noindex=has_filters, show_intro=not has_filters,
+        games=games, q=q, genre=genre, platform=platform, sort=sort,
+        weekly_ranking=weekly_ranking, requests=requests, articles=ARTICLES
+    )
 
 # ---------------------------------------------------------------------------
 # SEO対策: ジャンル別 静的URLルーティング (LP用)
 # ---------------------------------------------------------------------------
-
-GENRE_SLUGS = {
-    "rpg": "RPG",
-    "action": "アクション",
-    "adventure": "アドベンチャー",
-    "simulation": "シミュレーション",
-    "fps-tps": "FPS / TPS",
-    "puzzle": "パズル",
-    "novel": "ノベル",
-    "horror": "ホラー",
-    "indie": "インディー",
-    "other": "その他 / 不明"
-}
 
 @app.get("/genres/{genre_slug}")
 def read_genre_page(request: Request, genre_slug: str, sort: str = "new"):
@@ -2099,17 +2587,24 @@ def read_genre_page(request: Request, genre_slug: str, sort: str = "new"):
     page_title = f"{genre_name}のおすすめ神ゲー布教一覧 - Oshi-Ge"
     og_desc = f"次に遊ぶゲームを探している方へ。みんなが熱く語る、ネタバレなしの{genre_name}おすすめ布教一覧です。"
 
+    # ゲームが0件、または並び替え付きURLの場合は noindex
+    noindex = (len(games) == 0) or (sort != "new")
+
     return render_page(
         request, 
         INDEX_HTML, 
         is_top=False, 
+        noindex=noindex,
+        show_intro=False,
         games=games, 
         q="", 
         genre=genre_name, 
+        genre_intro=GENRE_INTROS.get(genre_slug, ""),
         platform="", 
         sort=sort, 
         weekly_ranking=weekly_ranking, 
         requests=requests,
+        articles=ARTICLES,
         page_title=page_title,
         og_description=og_desc
     )
@@ -2124,7 +2619,7 @@ def random_game():
 
 @app.get("/games/new")
 def new_game_form(request: Request, title: str = ""):
-    return render_page(request, NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge", title=clip(title, 200))
+    return render_page(request, NEW_GAME_HTML, page_title="ゲームを追加する - Oshi-Ge", noindex=True, title=clip(title, 200))
 
 @app.post("/games/new")
 def create_game(
@@ -2155,7 +2650,7 @@ def create_game(
         return alert_back('必須項目が入力されていません。')
 
     def dup_response():
-        return render_page(request, NEW_GAME_HTML, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, developer_x_id=developer_x_id, page_title="ゲームを追加する - Oshi-Ge")
+        return render_page(request, NEW_GAME_HTML, noindex=True, error_msg=f"「{title}」は既に登録されています。", title=title, description=description, genre=genre, platform=platform, developer_x_id=developer_x_id, page_title="ゲームを追加する - Oshi-Ge")
 
     user_id = get_user_id(request)
 
@@ -2194,7 +2689,7 @@ def edit_game_form(request: Request, game_id: int):
         game = conn.execute('SELECT * FROM games WHERE id = %s', (game_id,)).fetchone()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    return render_page(request, EDIT_GAME_HTML, game=game, page_title=f"{game['title']}の編集 - Oshi-Ge")
+    return render_page(request, EDIT_GAME_HTML, game=game, noindex=True, page_title=f"{game['title']}の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/edit")
 def update_game(request: Request, game_id: int, title: str = Form(...), description: str = Form(""), genre: str = Form(""), platform: str = Form(""), developer_x_id: str = Form(""), image_base64: str = Form("")):
@@ -2256,7 +2751,14 @@ def read_game(request: Request, game_id: int, sort: str = "likes"):
     og_desc = game['description'] if game['description'] else f"『{game['title']}』のおすすめ布教ページです。ネタバレなしで魅力をお伝えします。"
     og_img = f"{get_base_url(request)}/games/{game_id}/ogp.png"
 
-    return render_page(request, GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img, game_schema=game)
+    # 内容が薄いゲームページ（投稿なし／説明も投稿も少ない）は検索エンジンにインデックスさせない
+    post_count = len(posts)
+    has_desc = bool((game["description"] or "").strip())
+    indexable = post_count >= 1 and (has_desc or post_count >= 2) and sort in ("likes",)
+    # 投稿が一定数集まったページにのみ商品リンクを表示
+    show_affiliate = post_count >= AFFILIATE_MIN_POSTS
+
+    return render_page(request, GAME_HTML, game=game, posts=posts, sort=sort, my_posts=my_posts, is_bookmarked=(game_id in bookmarks), page_title=game_title_tag, og_description=og_desc, og_image=og_img, game_schema=game, noindex=not indexable, show_affiliate=show_affiliate)
 
 @app.post("/games/{game_id}/posts")
 def create_post(request: Request, game_id: int, username: str = Form(...), catchphrase: str = Form(...), target_audience: str = Form(""), play_time: str = Form(""), content: str = Form(...), spoiler_level: int = Form(...), oshi_points: List[str] = Form(default=[])):
@@ -2305,7 +2807,7 @@ def edit_post_form(request: Request, game_id: int, post_id: int):
     if not is_owner(request, post, user_id):
         return HTMLResponse(NO_EDIT_PERMISSION.format(gid=game_id))
 
-    return render_page(request, EDIT_POST_HTML, game_id=game_id, post=post, page_title="布教の編集 - Oshi-Ge")
+    return render_page(request, EDIT_POST_HTML, game_id=game_id, post=post, noindex=True, page_title="布教の編集 - Oshi-Ge")
 
 @app.post("/games/{game_id}/posts/{post_id}/edit")
 def update_post(
@@ -2436,7 +2938,7 @@ def mypage(request: Request):
 
     total_likes = sum((p.get("likes") or 0) + (p.get("wanna_play") or 0) + (p.get("agree") or 0) for p in my_posts_list)
 
-    return render_page(request, MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, total_likes=total_likes, page_title="マイページ - Oshi-Ge")
+    return render_page(request, MYPAGE_HTML, my_posts_list=my_posts_list, bookmarked_games=bookmarked_games, total_likes=total_likes, noindex=True, page_title="マイページ - Oshi-Ge")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
