@@ -1275,7 +1275,9 @@ BASE_HTML = """
       gtag('config', 'G-XRFBSR9HSR');
     </script>
     
+    {% if not noindex %}
     <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-6608111802250449" crossorigin="anonymous"></script>
+    {% endif %}
     <link href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.13/cropper.min.js"></script>
 
@@ -2238,11 +2240,9 @@ def ogp_game(game_id: int):
 @app.get("/robots.txt")
 def robots_txt(request: Request):
     base = get_base_url(request)
-    body = (
-        "User-agent: Mediapartners-Google\n"
-        "Disallow:\n"
-        "\n"
-        "User-agent: *\n"
+    # AdSenseクローラー(Mediapartners-Google)は「User-agent: *」を無視するため、
+    # 広告を出さないページは同じ禁止ルールを個別に指定する
+    rules = (
         "Disallow: /mypage\n"
         "Disallow: /admin\n"
         "Disallow: /auth/\n"
@@ -2254,6 +2254,11 @@ def robots_txt(request: Request):
         "Disallow: /games/*/posts/\n"
         "Disallow: /posts/\n"
         "Disallow: /requests\n"
+    )
+    body = (
+        "User-agent: Mediapartners-Google\n" + rules +
+        "\n"
+        "User-agent: *\n" + rules +
         "\n"
         f"Sitemap: {base}/sitemap.xml\n"
     )
